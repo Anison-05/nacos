@@ -10,7 +10,8 @@ import {
   ScrollText,
   AlertOctagon,
   LogOut,
-  ShieldCheck
+  ShieldCheck,
+  KeyRound
 } from 'lucide-react';
 
 export function AdminLayout({ currentTab, onSelectTab, children }) {
@@ -24,6 +25,7 @@ export function AdminLayout({ currentTab, onSelectTab, children }) {
     { id: 'admin-students', label: 'Students / Voters', icon: GraduationCap },
     { id: 'admin-results', label: 'Results & Tally', icon: BarChart3 },
     { id: 'admin-audit-logs', label: 'Audit Trail', icon: ScrollText },
+    { id: 'admin-settings', label: 'Admin Settings', icon: KeyRound },
     { id: 'admin-danger-zone', label: 'Danger Zone', icon: AlertOctagon, danger: true }
   ];
 

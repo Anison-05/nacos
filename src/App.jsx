@@ -24,6 +24,7 @@ import { StudentManagement } from './pages/admin/StudentManagement';
 import { Results } from './pages/admin/Results';
 import { AuditLogs } from './pages/admin/AuditLogs';
 import { DangerZone } from './pages/admin/DangerZone';
+import { AdminSettings } from './pages/admin/AdminSettings';
 
 function AppContent() {
   const { currentUser, userRole, loading } = useAuth();
@@ -85,6 +86,8 @@ function AppContent() {
         return <AuditLogs />;
       case 'admin-danger-zone':
         return <DangerZone />;
+      case 'admin-settings':
+        return <AdminSettings />;
       case 'admin-dashboard':
       default:
         return <AdminDashboard onSelectTab={handleNavigate} />;

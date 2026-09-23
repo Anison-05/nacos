@@ -92,10 +92,11 @@ export function AuthProvider({ children }) {
   };
 
   const refreshProfile = async () => {
-    if (currentUser && userRole === 'student') {
+    if (currentUser) {
       const sessionData = await authService.getCurrentSession();
-      if (sessionData && sessionData.profile) {
-        setStudentProfile(sessionData.profile);
+      if (sessionData) {
+        if (sessionData.profile) setStudentProfile(sessionData.profile);
+        if (sessionData.adminProfile) setAdminProfile(sessionData.adminProfile);
       }
     }
   };

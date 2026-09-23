@@ -276,16 +276,24 @@ export function AdminDashboard({ onSelectTab }) {
             </div>
 
             <div className="mt-4 pt-3 border-top">
-              <div className="d-flex justify-content-between align-items-center">
+              <div className="d-flex flex-column flex-sm-row justify-content-between align-items-sm-center gap-2">
                 <span className="small text-secondary">
-                  Need to import new voters or inspect the student registry?
+                  Need to update admin login credentials or manage voter list?
                 </span>
-                <button
-                  onClick={() => onSelectTab('admin-students')}
-                  className="btn btn-nacos-primary btn-sm rounded-pill px-3 fw-bold"
-                >
-                  Student Management
-                </button>
+                <div className="d-flex gap-2">
+                  <button
+                    onClick={() => onSelectTab('admin-settings')}
+                    className="btn btn-outline-dark btn-sm rounded-pill px-3 fw-bold"
+                  >
+                    Admin Settings
+                  </button>
+                  <button
+                    onClick={() => onSelectTab('admin-students')}
+                    className="btn btn-nacos-primary btn-sm rounded-pill px-3 fw-bold"
+                  >
+                    Student Registry
+                  </button>
+                </div>
               </div>
             </div>
           </div>

@@ -256,5 +256,63 @@ export const authService = {
       return;
     }
     await supabase.auth.signOut();
+  },
+
+  /**
+   * Updates admin profile credentials (name, email, password)
+   */
+  async updateAdminCredentials({ adminId, fullName, newEmail, newPassword }) {
+    if (!isSupabaseConfigured) {
+      return { success: true, message: 'Admin credentials updated (demo mode).' };
+    }
+
+    // Try backend API first (handles auto-confirmation and service role override)
+    try {
+      const response = await fetch('/api/admin/update-credentials', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          admin_id: adminId,
+          full_name: fullName,
+          email: newEmail,
+          password: newPassword
+        })
+      });
+
+      if (response.ok) {
+        return await response.json();
+      }
+    } catch (apiErr) {
+      console.warn('API update-credentials call unavailable, falling back to direct client SDK:', apiErr);
+    }
+
+    // Fallback: Direct Supabase Client SDK
+    const updates = {};
+    if (newEmail) updates.email = newEmail.trim().toLowerCase();
+    if (newPassword && newPassword.trim()) {
+      if (newPassword.trim().length < 6) {
+        throw new Error('Password must be at least 6 characters long.');
+      }
+      updates.password = newPassword.trim();
+    }
+
+    if (Object.keys(updates).length > 0) {
+      const { error: authErr } = await supabase.auth.updateUser(updates);
+      if (authErr) throw authErr;
+    }
+
+    const dbUpdates = {};
+    if (fullName) dbUpdates.full_name = fullName.trim();
+    if (newEmail) dbUpdates.email = newEmail.trim().toLowerCase();
+
+    if (Object.keys(dbUpdates).length > 0) {
+      const { error: dbErr } = await supabase
+        .from('admin_users')
+        .update(dbUpdates)
+        .eq('id', adminId);
+      if (dbErr) throw dbErr;
+    }
+
+    return { success: true, message: 'Admin profile updated successfully.' };
   }
 };
