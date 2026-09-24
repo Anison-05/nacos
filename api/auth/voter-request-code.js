@@ -86,6 +86,10 @@ export default async function handler(req, res) {
         </html>
       `;
 
+    let emailDispatched = false;
+    let emailNotice = null;
+
+    try {
       await sendBrevoEmail({
         toEmail: studentEmail,
         toName: full_name || 'Student Voter',
@@ -93,8 +97,10 @@ export default async function handler(req, res) {
         htmlContent,
         textContent: `Your NACOS Voter Verification Code is: ${code}. Matric: ${studentMatric}`
       });
+      emailDispatched = true;
     } catch (brevoErr) {
       console.warn('Brevo email dispatch notice:', brevoErr.message);
+      emailNotice = brevoErr.message;
     }
 
     // Channel B: Supabase Auth mailer trigger
@@ -109,9 +115,13 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       success: true,
+      email_dispatched: emailDispatched,
+      email_notice: emailNotice,
       matric_number: studentMatric,
       email: studentEmail,
-      message: `A 6-digit verification code has been dispatched to ${studentEmail}.`
+      message: emailDispatched
+        ? `A 6-digit verification code has been dispatched to ${studentEmail}.`
+        : `Verification code generated. (Notice: Brevo mail service returned: "${emailNotice}". Please verify your Brevo API key activation in your Brevo dashboard).`
     });
   } catch (err) {
     console.error('voter-request-code handler error:', err);

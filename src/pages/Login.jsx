@@ -27,6 +27,7 @@ export function Login({ onNavigate }) {
   const [resendCooldown, setResendCooldown] = useState(0);
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
+  const [emailNotice, setEmailNotice] = useState(null);
   const [fieldValidation, setFieldValidation] = useState(null);
 
   // Countdown timer for code resend cooldown
@@ -75,6 +76,7 @@ export function Login({ onNavigate }) {
       const res = await requestVoterOtp(cleanMatric, cleanEmail);
       setStep('VERIFY_OTP');
       setResendCooldown(60);
+      setEmailNotice(res.email_notice || null);
       setSuccessMsg(res.message || `A 6-digit verification code was sent to ${cleanEmail}.`);
     } catch (err) {
       console.warn('Voter credentials verification failed:', err);
@@ -118,9 +120,10 @@ export function Login({ onNavigate }) {
     setError('');
     setSuccessMsg('');
     try {
-      await requestVoterOtp(matricNumber, email);
+      const res = await requestVoterOtp(matricNumber, email);
       setResendCooldown(60);
-      setSuccessMsg(`A new verification code was sent to ${email.trim().toLowerCase()}.`);
+      setEmailNotice(res?.email_notice || null);
+      setSuccessMsg(res?.message || `A new verification code was sent to ${email.trim().toLowerCase()}.`);
     } catch (err) {
       setError(err.message || 'Failed to resend code. Please try again shortly.');
     } finally {
@@ -276,6 +279,22 @@ export function Login({ onNavigate }) {
                       </button>
                     </div>
                   </div>
+
+                  {/* Mail Service Notice (If Brevo returned an issue) */}
+                  {emailNotice && (
+                    <div className="alert alert-warning py-2 px-3 small text-start mb-3" style={{ fontSize: '0.8rem' }}>
+                      <div className="fw-bold mb-1 d-flex align-items-center gap-1">
+                        <AlertCircle size={14} />
+                        <span>Brevo Mail Service Notice:</span>
+                      </div>
+                      <div className="font-monospace text-dark bg-white p-1 rounded border mb-1" style={{ fontSize: '0.75rem' }}>
+                        {emailNotice}
+                      </div>
+                      <div className="text-secondary" style={{ fontSize: '0.75rem', lineHeight: '1.3' }}>
+                        Please verify that your Brevo API key is enabled in the Brevo dashboard under <strong>Settings &gt; SMTP &amp; API</strong>, and that <code>{email}</code> is verified under <strong>Senders</strong>.
+                      </div>
+                    </div>
+                  )}
 
                   {/* 6-Digit OTP Input */}
                   <div className="mb-4">

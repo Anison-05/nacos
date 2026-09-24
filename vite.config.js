@@ -43,11 +43,14 @@ function apiDevPlugin(env) {
 
               const { code, full_name, matric_number: studentMatric, email: studentEmail } = data;
 
+              let emailDispatched = false;
+              let emailNotice = null;
+
               // 2. Dispatch email via Brevo REST API if configured
               const brevoKey = env.BREVO_API_KEY;
               if (brevoKey) {
                 try {
-                  await fetch('https://api.brevo.com/v3/smtp/email', {
+                  const bRes = await fetch('https://api.brevo.com/v3/smtp/email', {
                     method: 'POST',
                     headers: {
                       'api-key': brevoKey,
@@ -64,7 +67,15 @@ function apiDevPlugin(env) {
                       textContent: `Your NACOS Voter Verification Code is: ${code}. Matric: ${studentMatric}`
                     })
                   });
+                  const bJson = await bRes.json();
+                  if (bRes.ok) {
+                    emailDispatched = true;
+                  } else {
+                    emailNotice = bJson.message || `Brevo returned HTTP ${bRes.status}`;
+                    console.warn('Brevo email dispatch notice (dev):', emailNotice);
+                  }
                 } catch (bErr) {
+                  emailNotice = bErr.message;
                   console.warn('Brevo email dispatch notice (dev):', bErr.message);
                 }
               }
@@ -83,9 +94,13 @@ function apiDevPlugin(env) {
               res.setHeader('Content-Type', 'application/json');
               return res.end(JSON.stringify({
                 success: true,
+                email_dispatched: emailDispatched,
+                email_notice: emailNotice,
                 matric_number: studentMatric,
                 email: studentEmail,
-                message: `A 6-digit verification code has been dispatched to ${studentEmail}.`
+                message: emailDispatched
+                  ? `A 6-digit verification code has been dispatched to ${studentEmail}.`
+                  : `Verification code generated. (Notice: Brevo returned "${emailNotice}". Please verify your Brevo API key activation).`
               }));
             } catch (err) {
               res.statusCode = 500;
