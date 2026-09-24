@@ -8,7 +8,7 @@ export async function sendBrevoEmail({ toEmail, toName, subject, htmlContent, te
     throw new Error('Server environment missing BREVO_API_KEY.');
   }
 
-  const senderEmail = process.env.BREVO_SENDER_EMAIL || 'electoral@nacos.org';
+  const senderEmail = process.env.BREVO_SENDER_EMAIL || 'simonenoch02@gmail.com';
   const senderName = process.env.BREVO_SENDER_NAME || 'NACOS Electoral Commission';
 
   const payload = {

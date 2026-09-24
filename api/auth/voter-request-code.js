@@ -39,8 +39,7 @@ export default async function handler(req, res) {
 
     // 2. Dispatch verification code to student's verified linked email
     // Channel A: Official Brevo transactional email
-    try {
-      const htmlContent = `
+    const htmlContent = `
         <!DOCTYPE html>
         <html>
         <head>
