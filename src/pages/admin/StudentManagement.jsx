@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { studentService } from '../../services/studentService';
 import { electionService } from '../../services/electionService';
-import { parseStudentCsv } from '../../utils/csvParser';
+import { parseStudentDocument } from '../../utils/documentParser';
 import { validateMatricNumber, getStudentCohort } from '../../lib/matricValidator';
 import { downloadStudentTemplate, exportStudentsCustom } from '../../utils/exportCsv';
 import { ResetConfirmModal } from '../../components/ResetConfirmModal';
@@ -19,6 +19,7 @@ import {
   Download,
   AlertTriangle,
   FileSpreadsheet,
+  FileText,
   Layers,
   Mail,
   User,
@@ -56,11 +57,13 @@ export function StudentManagement() {
   const [manualError, setManualError] = useState('');
   const [manualSaving, setManualSaving] = useState(false);
 
-  // CSV Import State
+  // Document Import State (Supports CSV, Excel .xlsx/.xls, Word .docx/.doc, PDF .pdf)
   const [csvFile, setCsvFile] = useState(null);
   const [csvPreview, setCsvPreview] = useState(null);
   const [csvParsing, setCsvParsing] = useState(false);
   const [csvImporting, setCsvImporting] = useState(false);
+  const [selectedImportType, setSelectedImportType] = useState('AUTO'); // 'AUTO' | 'MATRIC_NAME' | 'MATRIC_EMAIL' | 'MATRIC_NAME_EMAIL'
+  const [importError, setImportError] = useState(null);
   const [importStatusMessage, setImportStatusMessage] = useState(null);
 
   // Dropdown menus
@@ -108,16 +111,18 @@ export function StudentManagement() {
     return () => window.removeEventListener('click', handleOutsideClick);
   }, []);
 
-  // CSV File Selection & Parse
-  const handleCsvSelect = async (e) => {
-    const file = e.target.files[0];
+  // Document File Selection & Parse (Supports CSV, Excel .xlsx/.xls, Word .docx/.doc, PDF .pdf)
+  const handleDocumentSelect = async (e, forcedType = null) => {
+    const file = e?.target?.files ? e.target.files[0] : csvFile;
     if (!file) return;
 
+    const typeToUse = forcedType || selectedImportType;
     setCsvFile(file);
     setCsvParsing(true);
+    setImportError(null);
     setImportStatusMessage(null);
     try {
-      const parsed = await parseStudentCsv(file);
+      const parsed = await parseStudentDocument(file, typeToUse);
 
       // Cross-reference with existing in-memory students to show "Will Update" vs "Will Insert"
       const existingMatricSet = new Set(students.map((s) => s.matric_number.toUpperCase()));
@@ -138,10 +143,18 @@ export function StudentManagement() {
         willInsertCount
       });
     } catch (err) {
-      alert(`CSV Parse Error: ${err.message}`);
+      console.warn('Document parse error:', err);
+      setImportError(err.message || 'Failed to extract student records from document.');
       setCsvPreview(null);
     } finally {
       setCsvParsing(false);
+    }
+  };
+
+  const handleImportTypeChange = (newType) => {
+    setSelectedImportType(newType);
+    if (csvFile) {
+      handleDocumentSelect(null, newType);
     }
   };
 
@@ -407,13 +420,16 @@ export function StudentManagement() {
             )}
           </div>
 
-          {/* Import CSV Button */}
+          {/* Import Student Roster Button */}
           <button
-            onClick={() => setShowCsvModal(true)}
+            onClick={() => {
+              setImportError(null);
+              setShowCsvModal(true);
+            }}
             className="btn btn-outline-success btn-sm rounded-pill d-flex align-items-center gap-1 px-3 fw-semibold shadow-sm"
           >
             <Upload size={15} />
-            <span>Import CSV</span>
+            <span>Import Student Roster</span>
           </button>
 
           {/* Manual Add Student Button */}
@@ -829,7 +845,7 @@ export function StudentManagement() {
         </div>
       )}
 
-      {/* CSV Import Modal */}
+      {/* Document Import Modal (CSV, Excel, Word, PDF) */}
       {showCsvModal && (
         <div className="modal show d-block" tabIndex="-1" style={{ backgroundColor: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(3px)' }}>
           <div className="modal-dialog modal-dialog-centered modal-lg">
@@ -838,9 +854,9 @@ export function StudentManagement() {
                 <div className="d-flex align-items-center gap-2">
                   <FileSpreadsheet className="text-success" size={24} />
                   <div>
-                    <h5 className="modal-title fw-bold mb-0">Import Students from CSV</h5>
+                    <h5 className="modal-title fw-bold mb-0">Import Student Roster</h5>
                     <span className="text-muted small" style={{ fontSize: '0.75rem' }}>
-                      Non-destructive upsert by Matriculation Number
+                      Supports CSV, Excel (.xlsx/.xls), Word (.docx), and PDF (.pdf) &bull; Non-destructive upsert
                     </span>
                   </div>
                 </div>
@@ -848,63 +864,107 @@ export function StudentManagement() {
               </div>
 
               <div className="modal-body p-4">
-                {/* 3 CSV Options Explanation Banner */}
-                <div className="bg-light p-3 rounded-3 mb-3 border">
-                  <div className="small fw-bold text-dark mb-1">Supported CSV Import Formats:</div>
-                  <div className="row g-2 small text-secondary">
-                    <div className="col-12 col-md-4">
-                      <div className="p-2 bg-white rounded border">
-                        <strong className="text-dark d-block">1. Matric + Name</strong>
-                        <code>matric_number, full_name</code>
-                      </div>
-                    </div>
-                    <div className="col-12 col-md-4">
-                      <div className="p-2 bg-white rounded border">
-                        <strong className="text-dark d-block">2. Matric + Email</strong>
-                        <code>matric_number, email</code>
-                      </div>
-                    </div>
-                    <div className="col-12 col-md-4">
-                      <div className="p-2 bg-white rounded border">
-                        <strong className="text-dark d-block">3. Full List</strong>
-                        <code>matric, name, email</code>
-                      </div>
-                    </div>
+                {/* Import Type Selector */}
+                <div className="mb-3">
+                  <label className="form-label small fw-bold text-dark d-block mb-1">
+                    Select Target Import Type:
+                  </label>
+                  <div className="btn-group w-100" role="group" aria-label="Import Type">
+                    <button
+                      type="button"
+                      className={`btn btn-sm ${selectedImportType === 'AUTO' ? 'btn-success fw-bold' : 'btn-outline-secondary'}`}
+                      onClick={() => handleImportTypeChange('AUTO')}
+                    >
+                      Auto Detect
+                    </button>
+                    <button
+                      type="button"
+                      className={`btn btn-sm ${selectedImportType === 'MATRIC_NAME' ? 'btn-success fw-bold' : 'btn-outline-secondary'}`}
+                      onClick={() => handleImportTypeChange('MATRIC_NAME')}
+                    >
+                      1. Matric + Name
+                    </button>
+                    <button
+                      type="button"
+                      className={`btn btn-sm ${selectedImportType === 'MATRIC_EMAIL' ? 'btn-success fw-bold' : 'btn-outline-secondary'}`}
+                      onClick={() => handleImportTypeChange('MATRIC_EMAIL')}
+                    >
+                      2. Matric + Email
+                    </button>
+                    <button
+                      type="button"
+                      className={`btn btn-sm ${selectedImportType === 'MATRIC_NAME_EMAIL' ? 'btn-success fw-bold' : 'btn-outline-secondary'}`}
+                      onClick={() => handleImportTypeChange('MATRIC_NAME_EMAIL')}
+                    >
+                      3. Full (Matric+Name+Email)
+                    </button>
+                  </div>
+                  <div className="form-text small mt-1 text-muted" style={{ fontSize: '0.78rem' }}>
+                    {selectedImportType === 'MATRIC_NAME' && 'Only Matric Number and Full Name are required. Email is optional and will not be overwritten.'}
+                    {selectedImportType === 'MATRIC_EMAIL' && 'Only Matric Number and Email are required. Full Name is optional and will not be overwritten.'}
+                    {selectedImportType === 'MATRIC_NAME_EMAIL' && 'Requires Matric Number, Full Name, and Email.'}
+                    {selectedImportType === 'AUTO' && 'Automatically detects available fields from headers and data.'}
                   </div>
                 </div>
 
                 {/* File Input */}
                 <div className="mb-3">
-                  <label className="form-label small fw-bold text-dark">Select CSV File to Upload</label>
+                  <label className="form-label small fw-bold text-dark">
+                    Upload Document (CSV, Excel, Word, or PDF)
+                  </label>
                   <input
                     type="file"
                     className="form-control"
-                    accept=".csv"
-                    onChange={handleCsvSelect}
+                    accept=".csv, .xlsx, .xls, .docx, .doc, .pdf"
+                    onChange={handleDocumentSelect}
                     disabled={csvParsing || csvImporting}
                   />
-                  <div className="form-text small mt-1">
-                    Headers recognized automatically: <em>Matric Number, matric_no, Full Name, Name, Gmail, Email</em> (case-insensitive)
+                  <div className="d-flex align-items-center gap-2 mt-2">
+                    <span className="badge bg-light text-dark border">.csv</span>
+                    <span className="badge bg-light text-dark border">.xlsx / .xls</span>
+                    <span className="badge bg-light text-dark border">.docx</span>
+                    <span className="badge bg-light text-dark border">.pdf</span>
+                    <span className="text-muted small ms-auto" style={{ fontSize: '0.75rem' }}>
+                      Recognizes Matric (e.g. FPA/CS/24/1-XXXX), Name, and Email
+                    </span>
                   </div>
                 </div>
 
+                {/* Parsing Spinner */}
                 {csvParsing && (
-                  <div className="text-center py-4">
+                  <div className="text-center py-4 bg-light rounded-3 my-3">
                     <span className="spinner-border spinner-border-sm me-2 text-success" />
-                    <span>Parsing and analyzing CSV structure...</span>
+                    <span className="small text-secondary fw-semibold">Extracting and validating student data...</span>
                   </div>
                 )}
 
+                {/* Parse Error Alert */}
+                {importError && (
+                  <div className="alert alert-danger d-flex align-items-start gap-2 py-3 px-3 my-3 small" role="alert">
+                    <AlertTriangle size={18} className="flex-shrink-0 mt-1" />
+                    <div>
+                      <strong>Document Extraction Notice:</strong>
+                      <div>{importError}</div>
+                      <div className="text-muted mt-1" style={{ fontSize: '0.75rem' }}>
+                        Make sure the file contains clearly formatted student rows with matriculation numbers (e.g., FPA/CS/24/1-0001).
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Preview Section */}
                 {csvPreview && (
-                  <div>
-                    {/* Mode Detection Header */}
+                  <div className="mt-3">
+                    {/* Header Summary Bar */}
                     <div className="d-flex align-items-center justify-content-between p-2 mb-3 bg-dark text-white rounded-3 px-3">
-                      <div className="d-flex align-items-center gap-2">
-                        <span className="badge bg-success">Detected Mode</span>
-                        <span className="fw-bold">{csvPreview.modeLabel}</span>
+                      <div className="d-flex align-items-center gap-2 flex-wrap">
+                        {csvPreview.fileType && (
+                          <span className="badge bg-info text-dark font-monospace">{csvPreview.fileType}</span>
+                        )}
+                        <span className="badge bg-success">Mode: {csvPreview.modeLabel}</span>
                       </div>
                       <span className="small text-secondary">
-                        {csvPreview.totalProcessed} total rows in CSV
+                        {csvPreview.totalProcessed} total entries extracted
                       </span>
                     </div>
 
@@ -934,7 +994,7 @@ export function StudentManagement() {
                       </div>
                       <div className="col-3">
                         <div className="p-2 bg-danger bg-opacity-10 border border-danger rounded text-center">
-                          <span className="small text-danger d-block fw-bold">Invalid / Dupes</span>
+                          <span className="small text-danger d-block fw-bold">Invalid / Skipped</span>
                           <span className="fs-5 fw-bold text-danger">
                             {csvPreview.invalidRows.length}
                           </span>
@@ -945,7 +1005,7 @@ export function StudentManagement() {
                     {/* Validation Warnings List */}
                     {csvPreview.invalidRows.length > 0 && (
                       <div className="alert alert-warning small py-2 mb-3" style={{ maxHeight: '130px', overflowY: 'auto' }}>
-                        <strong>Validation Warnings & Duplicates:</strong>
+                        <strong>Validation Warnings & Skipped Rows:</strong>
                         <ul className="mb-0 ps-3">
                           {csvPreview.invalidRows.slice(0, 6).map((inv, idx) => (
                             <li key={idx}>Row {inv.row}: {inv.reason}</li>

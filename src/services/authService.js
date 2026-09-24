@@ -61,47 +61,61 @@ export const authService = {
         body: JSON.stringify({ matric_number: cleanMatric, email: cleanEmail })
       });
 
-      const result = await response.json();
-      if (!response.ok) {
-        throw new Error(result.error || 'Failed to dispatch verification code.');
+      if (response.ok) {
+        const result = await response.json();
+        return result;
       }
 
-      return result;
+      // Check if server returned a 400 validation error (e.g. unregistered matric or mismatched email)
+      const contentType = response.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        const result = await response.json();
+        if (result && result.error) {
+          throw new Error(result.error);
+        }
+      }
     } catch (apiErr) {
       // If serverless endpoint returned a business logic validation error, throw it immediately
-      if (apiErr.message && !apiErr.message.includes('fetch') && !apiErr.message.includes('NetworkError') && !apiErr.message.includes('Failed to fetch')) {
+      if (
+        apiErr.message &&
+        !apiErr.message.includes('fetch') &&
+        !apiErr.message.includes('NetworkError') &&
+        !apiErr.message.includes('Failed to fetch') &&
+        !apiErr.message.includes('Unexpected token') &&
+        !apiErr.message.includes('JSON')
+      ) {
         throw apiErr;
       }
 
-      console.warn('API endpoint unavailable, falling back to direct PostgreSQL RPC:', apiErr.message);
-
-      // Direct Database Stored Procedure Fallback
-      const { data, error } = await supabase.rpc('voter_request_otp', {
-        p_matric_number: cleanMatric,
-        p_email: cleanEmail
-      });
-
-      if (error) {
-        throw new Error(error.message || 'Authentication failed. Please verify your credentials.');
-      }
-
-      // Trigger Supabase secondary email delivery
-      try {
-        await supabase.auth.signInWithOtp({
-          email: cleanEmail,
-          options: { shouldCreateUser: false }
-        });
-      } catch (otpErr) {
-        // Non-blocking
-      }
-
-      return {
-        success: true,
-        matric_number: data.matric_number,
-        email: data.email,
-        message: `Verification code dispatched to ${data.email}.`
-      };
+      console.warn('API endpoint unavailable or non-JSON, falling back to direct PostgreSQL RPC:', apiErr.message);
     }
+
+    // Direct Database Stored Procedure Fallback (Always available via Supabase connection)
+    const { data, error } = await supabase.rpc('voter_request_otp', {
+      p_matric_number: cleanMatric,
+      p_email: cleanEmail
+    });
+
+    if (error) {
+      throw new Error(error.message || 'Authentication failed. Please verify your credentials.');
+    }
+
+    // Trigger Supabase secondary email delivery
+    try {
+      await supabase.auth.signInWithOtp({
+        email: cleanEmail,
+        options: { shouldCreateUser: false }
+      });
+    } catch (otpErr) {
+      // Non-blocking
+    }
+
+    return {
+      success: true,
+      matric_number: data.matric_number,
+      email: data.email,
+      message: `A 6-digit verification code has been dispatched to ${data.email}.`
+    };
   },
 
   /**
@@ -133,7 +147,7 @@ export const authService = {
 
     // 2. Sign in to Supabase Auth with returned voter credentials
     const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
-      email: verifyData.email,
+      email: verifyData.auth_email || verifyData.email,
       password: verifyData.auth_secret
     });
 

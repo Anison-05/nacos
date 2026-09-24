@@ -27,3 +27,6 @@ dist-ssr
 .env
 .env*.local
 *.pem
+
+# Scratch testing scripts
+scratch/
