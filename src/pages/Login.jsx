@@ -172,6 +172,19 @@ export function Login({ onNavigate }) {
                   <li>Unverified email accounts will be prompted for OTP confirmation.</li>
                 </ul>
               </div>
+
+              {/* Link to Admin Command Center Login */}
+              <div className="text-center pt-3 border-top mt-3">
+                <button
+                  type="button"
+                  id="link_to_admin_login"
+                  className="btn btn-link text-decoration-none p-0 text-success small d-inline-flex align-items-center gap-1 fw-bold"
+                  onClick={() => onNavigate('admin-login')}
+                >
+                  <ShieldCheck size={16} />
+                  <span>Electoral Commission Admin Login &rarr;</span>
+                </button>
+              </div>
             </div>
 
             {/* Card Footer */}

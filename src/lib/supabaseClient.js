@@ -1,7 +1,11 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+// Production defaults so that client bundle connects reliably even if Vercel build lacks explicit env overrides
+const defaultUrl = 'https://hsseypgtulmecdvkmkgs.supabase.co';
+const defaultAnonKey = 'sb_publishable_tfzWkPHpsG7h7GyPdMM4pg_dPFHieOJ';
+
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || defaultUrl;
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || defaultAnonKey;
 
 export const isSupabaseConfigured = Boolean(
   supabaseUrl &&
@@ -10,17 +14,7 @@ export const isSupabaseConfigured = Boolean(
   !supabaseUrl.includes('placeholder')
 );
 
-if (!isSupabaseConfigured) {
-  console.warn(
-    '[NACOS Voting System] Supabase is not yet configured. Please set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in your .env file.'
-  );
-}
-
-// Fallback dummy URL and anon key to prevent createClient from crashing if unconfigured
-const effectiveUrl = isSupabaseConfigured ? supabaseUrl : 'https://placeholder-project.supabase.co';
-const effectiveKey = isSupabaseConfigured ? supabaseAnonKey : 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.e30.dummy';
-
-export const supabase = createClient(effectiveUrl, effectiveKey, {
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
     persistSession: true,
     autoRefreshToken: true,
