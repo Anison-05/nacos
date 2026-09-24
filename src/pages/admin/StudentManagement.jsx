@@ -2,8 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { studentService } from '../../services/studentService';
 import { electionService } from '../../services/electionService';
 import { parseStudentCsv } from '../../utils/csvParser';
-import { validateMatricNumber } from '../../lib/matricValidator';
-import { downloadCsv } from '../../utils/exportCsv';
+import { validateMatricNumber, getStudentCohort } from '../../lib/matricValidator';
+import { downloadStudentTemplate, exportStudentsCustom } from '../../utils/exportCsv';
 import { ResetConfirmModal } from '../../components/ResetConfirmModal';
 import {
   GraduationCap,
@@ -18,14 +18,23 @@ import {
   Filter,
   Download,
   AlertTriangle,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Layers,
+  Mail,
+  User,
+  ShieldCheck,
+  ChevronDown
 } from 'lucide-react';
 
 export function StudentManagement() {
   const [students, setStudents] = useState([]);
   const [election, setElection] = useState(null);
   const [loading, setLoading] = useState(true);
+
+  // Filters & Search
   const [searchTerm, setSearchTerm] = useState('');
+  const [filterCohort, setFilterCohort] = useState('ALL');
+  const [filterEmailStatus, setFilterEmailStatus] = useState('ALL');
   const [filterEligibility, setFilterEligibility] = useState('ALL');
   const [filterVoted, setFilterVoted] = useState('ALL');
 
@@ -36,20 +45,27 @@ export function StudentManagement() {
   const [selectedStudentForReset, setSelectedStudentForReset] = useState(null);
   const [editingStudent, setEditingStudent] = useState(null);
 
-  // Manual Form
+  // Manual Form State
   const [manualForm, setManualForm] = useState({
     matric_number: '',
     full_name: '',
     email: '',
     eligible_to_vote: true
   });
+  const [manualValidation, setManualValidation] = useState(null);
   const [manualError, setManualError] = useState('');
+  const [manualSaving, setManualSaving] = useState(false);
 
-  // CSV State
+  // CSV Import State
   const [csvFile, setCsvFile] = useState(null);
   const [csvPreview, setCsvPreview] = useState(null);
   const [csvParsing, setCsvParsing] = useState(false);
   const [csvImporting, setCsvImporting] = useState(false);
+  const [importStatusMessage, setImportStatusMessage] = useState(null);
+
+  // Dropdown menus
+  const [showTemplateMenu, setShowTemplateMenu] = useState(false);
+  const [showExportMenu, setShowExportMenu] = useState(false);
 
   const loadData = async () => {
     setLoading(true);
@@ -57,6 +73,8 @@ export function StudentManagement() {
       const [studentsData, activeEl] = await Promise.all([
         studentService.getStudents({
           search: searchTerm,
+          filterCohort,
+          filterEmailStatus,
           filterEligibility,
           filterVoted
         }),
@@ -73,12 +91,22 @@ export function StudentManagement() {
 
   useEffect(() => {
     loadData();
-  }, [filterEligibility, filterVoted]);
+  }, [filterCohort, filterEmailStatus, filterEligibility, filterVoted]);
 
   const handleSearch = (e) => {
     e.preventDefault();
     loadData();
   };
+
+  // Close menus when clicking outside
+  useEffect(() => {
+    const handleOutsideClick = () => {
+      setShowTemplateMenu(false);
+      setShowExportMenu(false);
+    };
+    window.addEventListener('click', handleOutsideClick);
+    return () => window.removeEventListener('click', handleOutsideClick);
+  }, []);
 
   // CSV File Selection & Parse
   const handleCsvSelect = async (e) => {
@@ -87,9 +115,28 @@ export function StudentManagement() {
 
     setCsvFile(file);
     setCsvParsing(true);
+    setImportStatusMessage(null);
     try {
       const parsed = await parseStudentCsv(file);
-      setCsvPreview(parsed);
+
+      // Cross-reference with existing in-memory students to show "Will Update" vs "Will Insert"
+      const existingMatricSet = new Set(students.map((s) => s.matric_number.toUpperCase()));
+      let willUpdateCount = 0;
+      let willInsertCount = 0;
+
+      parsed.validStudents.forEach((vs) => {
+        if (existingMatricSet.has(vs.matric_number.toUpperCase())) {
+          willUpdateCount++;
+        } else {
+          willInsertCount++;
+        }
+      });
+
+      setCsvPreview({
+        ...parsed,
+        willUpdateCount,
+        willInsertCount
+      });
     } catch (err) {
       alert(`CSV Parse Error: ${err.message}`);
       setCsvPreview(null);
@@ -102,9 +149,14 @@ export function StudentManagement() {
     if (!csvPreview || !csvPreview.validStudents.length) return;
 
     setCsvImporting(true);
+    setImportStatusMessage(null);
     try {
       const result = await studentService.importStudents(csvPreview.validStudents);
-      alert(`Successfully imported ${result.imported} students!`);
+      const inserted = result.inserted || 0;
+      const updated = result.updated || 0;
+      const total = result.total || inserted + updated;
+
+      alert(`Import Successful!\n- New records added: ${inserted}\n- Existing records updated: ${updated}\n- Total processed: ${total}`);
       setShowCsvModal(false);
       setCsvPreview(null);
       setCsvFile(null);
@@ -123,10 +175,11 @@ export function StudentManagement() {
       setEditingStudent(s);
       setManualForm({
         matric_number: s.matric_number,
-        full_name: s.full_name,
-        email: s.email,
+        full_name: s.full_name || '',
+        email: s.email || '',
         eligible_to_vote: s.eligible_to_vote
       });
+      setManualValidation(validateMatricNumber(s.matric_number));
     } else {
       setEditingStudent(null);
       setManualForm({
@@ -135,34 +188,51 @@ export function StudentManagement() {
         email: '',
         eligible_to_vote: true
       });
+      setManualValidation(null);
     }
     setShowManualModal(true);
+  };
+
+  const handleManualMatricChange = (val) => {
+    const updated = val.toUpperCase();
+    setManualForm({ ...manualForm, matric_number: updated });
+    setManualError('');
+    if (updated.length >= 8) {
+      setManualValidation(validateMatricNumber(updated));
+    } else {
+      setManualValidation(null);
+    }
   };
 
   const handleSaveManual = async (e) => {
     e.preventDefault();
     setManualError('');
 
-    // Validate matric number
     const validation = validateMatricNumber(manualForm.matric_number);
     if (!validation.isValid) {
-      setManualError(validation.error);
+      setManualError(validation.error || 'Invalid matriculation number format or cohort range.');
       return;
     }
 
+    if (!manualForm.full_name.trim() && !manualForm.email.trim()) {
+      setManualError('Please provide at least a Full Name or Email address.');
+      return;
+    }
+
+    setManualSaving(true);
     try {
       if (editingStudent) {
         await studentService.updateStudent(editingStudent.id, {
           matric_number: validation.normalized,
-          full_name: manualForm.full_name.trim(),
-          email: manualForm.email.trim().toLowerCase(),
+          full_name: manualForm.full_name.trim() || null,
+          email: manualForm.email.trim().toLowerCase() || null,
           eligible_to_vote: manualForm.eligible_to_vote
         });
       } else {
         await studentService.addStudentManual({
           matric_number: validation.normalized,
-          full_name: manualForm.full_name.trim(),
-          email: manualForm.email.trim().toLowerCase(),
+          full_name: manualForm.full_name.trim() || null,
+          email: manualForm.email.trim().toLowerCase() || null,
           eligible_to_vote: manualForm.eligible_to_vote
         });
       }
@@ -170,7 +240,9 @@ export function StudentManagement() {
       setShowManualModal(false);
       loadData();
     } catch (err) {
-      setManualError(err.message || 'Failed to save student.');
+      setManualError(err.message || 'Failed to save student record.');
+    } finally {
+      setManualSaving(false);
     }
   };
 
@@ -184,6 +256,10 @@ export function StudentManagement() {
   };
 
   const handleMarkVerified = async (s) => {
+    if (!s.email) {
+      alert('Cannot verify email: Student has no registered email. Please edit student and add an email first.');
+      return;
+    }
     try {
       await studentService.updateStudent(s.id, { email_verified: true });
       loadData();
@@ -203,7 +279,7 @@ export function StudentManagement() {
 
     try {
       await studentService.resetVoter(selectedStudentForReset.id, election?.id, reason);
-      alert(`Voting status for ${selectedStudentForReset.full_name} has been reset.`);
+      alert(`Voting status for ${selectedStudentForReset.full_name || selectedStudentForReset.matric_number} has been reset.`);
       setShowResetModal(false);
       setSelectedStudentForReset(null);
       loadData();
@@ -212,51 +288,138 @@ export function StudentManagement() {
     }
   };
 
-  // Export List
-  const handleExportRoster = () => {
-    const data = students.map((s) => ({
-      'Matric Number': s.matric_number,
-      'Full Name': s.full_name,
-      'Email': s.email,
-      'Verified': s.email_verified ? 'YES' : 'NO',
-      'Eligible': s.eligible_to_vote ? 'YES' : 'NO',
-      'Voted': s.has_voted ? 'YES' : 'NO'
-    }));
-    downloadCsv(data, 'nacos_student_voter_roster.csv');
-  };
+  // Compute Registry Statistics
+  const totalCount = students.length;
+  const nd1Count = students.filter((s) => s.cohort === 'ND1').length;
+  const nd2Count = students.filter((s) => s.cohort === 'ND2').length;
+  const hasEmailCount = students.filter((s) => s.email && s.email.trim() !== '').length;
+  const missingEmailCount = totalCount - hasEmailCount;
+  const votedCount = students.filter((s) => s.has_voted).length;
 
   return (
-    <div>
-      {/* Title & Actions */}
-      <div className="d-flex flex-column flex-sm-row justify-content-between align-items-sm-center gap-3 mb-4">
+    <div className="container-fluid p-0">
+      {/* Top Header & Actions Bar */}
+      <div className="d-flex flex-column flex-lg-row justify-content-between align-items-lg-center gap-3 mb-4">
         <div>
           <h2 className="fw-bold text-dark mb-1">Student & Voter Registry</h2>
           <p className="text-secondary small mb-0">
-            Cohort management, CSV bulk import, voter eligibility, and status resets
+            Multi-mode CSV imports, automatic ND1/ND2 detection, non-destructive updates, and voter status tracking
           </p>
         </div>
 
-        <div className="d-flex flex-wrap gap-2">
-          <button
-            onClick={handleExportRoster}
-            className="btn btn-outline-secondary btn-sm rounded-pill d-flex align-items-center gap-1 px-3"
-            title="Export CSV"
-          >
-            <Download size={15} />
-            <span>Export Roster</span>
-          </button>
+        <div className="d-flex flex-wrap align-items-center gap-2">
+          {/* Download Templates Dropdown */}
+          <div className="dropdown position-relative" onClick={(e) => e.stopPropagation()}>
+            <button
+              onClick={() => {
+                setShowTemplateMenu(!showTemplateMenu);
+                setShowExportMenu(false);
+              }}
+              className="btn btn-outline-secondary btn-sm rounded-pill d-flex align-items-center gap-1 px-3"
+              type="button"
+            >
+              <FileSpreadsheet size={15} />
+              <span>CSV Templates</span>
+              <ChevronDown size={13} />
+            </button>
+            {showTemplateMenu && (
+              <div className="dropdown-menu show shadow border-0 mt-1 py-1" style={{ position: 'absolute', zIndex: 1050 }}>
+                <button
+                  className="dropdown-item small py-2 d-flex flex-column"
+                  onClick={() => {
+                    downloadStudentTemplate('MATRIC_NAME');
+                    setShowTemplateMenu(false);
+                  }}
+                >
+                  <span className="fw-bold text-dark">Option 1: Matric + Name</span>
+                  <span className="text-muted" style={{ fontSize: '0.72rem' }}>Headers: matric_number, full_name</span>
+                </button>
+                <button
+                  className="dropdown-item small py-2 d-flex flex-column"
+                  onClick={() => {
+                    downloadStudentTemplate('MATRIC_EMAIL');
+                    setShowTemplateMenu(false);
+                  }}
+                >
+                  <span className="fw-bold text-dark">Option 2: Matric + Email</span>
+                  <span className="text-muted" style={{ fontSize: '0.72rem' }}>Headers: matric_number, email</span>
+                </button>
+                <div className="dropdown-divider my-1" />
+                <button
+                  className="dropdown-item small py-2 d-flex flex-column"
+                  onClick={() => {
+                    downloadStudentTemplate('COMPLETE');
+                    setShowTemplateMenu(false);
+                  }}
+                >
+                  <span className="fw-bold text-success">Option 3: Matric + Name + Email</span>
+                  <span className="text-muted" style={{ fontSize: '0.72rem' }}>Headers: matric_number, full_name, email</span>
+                </button>
+              </div>
+            )}
+          </div>
 
+          {/* Export Roster Dropdown */}
+          <div className="dropdown position-relative" onClick={(e) => e.stopPropagation()}>
+            <button
+              onClick={() => {
+                setShowExportMenu(!showExportMenu);
+                setShowTemplateMenu(false);
+              }}
+              className="btn btn-outline-dark btn-sm rounded-pill d-flex align-items-center gap-1 px-3"
+              type="button"
+            >
+              <Download size={15} />
+              <span>Export Roster</span>
+              <ChevronDown size={13} />
+            </button>
+            {showExportMenu && (
+              <div className="dropdown-menu show shadow border-0 mt-1 py-1" style={{ position: 'absolute', zIndex: 1050 }}>
+                <button
+                  className="dropdown-item small py-2"
+                  onClick={() => {
+                    exportStudentsCustom(students, 'MATRIC_NAME');
+                    setShowExportMenu(false);
+                  }}
+                >
+                  Export Matric + Name
+                </button>
+                <button
+                  className="dropdown-item small py-2"
+                  onClick={() => {
+                    exportStudentsCustom(students, 'MATRIC_EMAIL');
+                    setShowExportMenu(false);
+                  }}
+                >
+                  Export Matric + Email
+                </button>
+                <div className="dropdown-divider my-1" />
+                <button
+                  className="dropdown-item small py-2 fw-bold text-dark"
+                  onClick={() => {
+                    exportStudentsCustom(students, 'COMPLETE');
+                    setShowExportMenu(false);
+                  }}
+                >
+                  Export Complete Voter Roster (All Details)
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Import CSV Button */}
           <button
             onClick={() => setShowCsvModal(true)}
-            className="btn btn-outline-success btn-sm rounded-pill d-flex align-items-center gap-1 px-3 fw-semibold"
+            className="btn btn-outline-success btn-sm rounded-pill d-flex align-items-center gap-1 px-3 fw-semibold shadow-sm"
           >
             <Upload size={15} />
             <span>Import CSV</span>
           </button>
 
+          {/* Manual Add Student Button */}
           <button
             onClick={() => handleOpenManual()}
-            className="btn btn-nacos-primary btn-sm rounded-pill d-flex align-items-center gap-1 px-3 fw-bold"
+            className="btn btn-nacos-primary btn-sm rounded-pill d-flex align-items-center gap-1 px-3 fw-bold shadow-sm"
           >
             <Plus size={15} />
             <span>Add Student</span>
@@ -264,10 +427,57 @@ export function StudentManagement() {
         </div>
       </div>
 
-      {/* Search & Filter Bar */}
+      {/* Cohort & Registry Metrics Bar */}
+      <div className="row g-3 mb-4">
+        <div className="col-6 col-md-2">
+          <div className="card border-0 shadow-sm p-3 h-100" style={{ borderRadius: '12px' }}>
+            <span className="small text-muted d-block mb-1">Total Registered</span>
+            <h4 className="fw-bold text-dark mb-0">{totalCount}</h4>
+          </div>
+        </div>
+        <div className="col-6 col-md-2">
+          <div className="card border-0 shadow-sm p-3 h-100 border-start border-primary border-4" style={{ borderRadius: '12px' }}>
+            <span className="small text-muted d-block mb-1">ND1 Cohort (2025)</span>
+            <h4 className="fw-bold text-primary mb-0">{nd1Count} <span className="fs-6 text-muted fw-normal">/ 142</span></h4>
+          </div>
+        </div>
+        <div className="col-6 col-md-2">
+          <div className="card border-0 shadow-sm p-3 h-100 border-start border-success border-4" style={{ borderRadius: '12px' }}>
+            <span className="small text-muted d-block mb-1">ND2 Cohort (2024)</span>
+            <h4 className="fw-bold text-success mb-0">{nd2Count} <span className="fs-6 text-muted fw-normal">/ 84</span></h4>
+          </div>
+        </div>
+        <div className="col-6 col-md-3">
+          <div className="card border-0 shadow-sm p-3 h-100" style={{ borderRadius: '12px' }}>
+            <span className="small text-muted d-block mb-1">Email Status</span>
+            <div className="d-flex align-items-center gap-2">
+              <span className="badge bg-success-subtle text-success border border-success-subtle px-2 py-1">
+                {hasEmailCount} with Email
+              </span>
+              {missingEmailCount > 0 && (
+                <span className="badge bg-warning-subtle text-warning border border-warning-subtle px-2 py-1">
+                  {missingEmailCount} Missing
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+        <div className="col-6 col-md-3">
+          <div className="card border-0 shadow-sm p-3 h-100" style={{ borderRadius: '12px' }}>
+            <span className="small text-muted d-block mb-1">Voting Turnout</span>
+            <div className="d-flex align-items-center gap-2">
+              <span className="fw-bold text-dark fs-5">{votedCount} Voted</span>
+              <span className="text-muted small">({totalCount ? Math.round((votedCount / totalCount) * 100) : 0}%)</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Advanced Search & Filtering Bar */}
       <div className="card border-0 shadow-sm p-3 mb-4" style={{ borderRadius: '14px' }}>
         <div className="row g-2 align-items-center">
-          <div className="col-12 col-md-5">
+          {/* Search Input */}
+          <div className="col-12 col-lg-4">
             <form onSubmit={handleSearch} className="input-group input-group-sm">
               <span className="input-group-text bg-light border-end-0">
                 <Search size={15} className="text-secondary" />
@@ -275,7 +485,7 @@ export function StudentManagement() {
               <input
                 type="text"
                 className="form-control border-start-0"
-                placeholder="Search by matric, full name, or email..."
+                placeholder="Search by matric, name, or email..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
               />
@@ -283,7 +493,34 @@ export function StudentManagement() {
             </form>
           </div>
 
-          <div className="col-6 col-md-3">
+          {/* Cohort Filter */}
+          <div className="col-6 col-md-2">
+            <select
+              className="form-select form-select-sm"
+              value={filterCohort}
+              onChange={(e) => setFilterCohort(e.target.value)}
+            >
+              <option value="ALL">All Cohorts (ND1 + ND2)</option>
+              <option value="ND1">ND1 (2025 Entry)</option>
+              <option value="ND2">ND2 (2024 Entry)</option>
+            </select>
+          </div>
+
+          {/* Email Status Filter */}
+          <div className="col-6 col-md-2">
+            <select
+              className="form-select form-select-sm"
+              value={filterEmailStatus}
+              onChange={(e) => setFilterEmailStatus(e.target.value)}
+            >
+              <option value="ALL">All Email Status</option>
+              <option value="HAS_EMAIL">Email Registered</option>
+              <option value="MISSING_EMAIL">Missing Email</option>
+            </select>
+          </div>
+
+          {/* Eligibility Filter */}
+          <div className="col-6 col-md-2">
             <select
               className="form-select form-select-sm"
               value={filterEligibility}
@@ -295,23 +532,25 @@ export function StudentManagement() {
             </select>
           </div>
 
-          <div className="col-6 col-md-3">
+          {/* Voting Status Filter */}
+          <div className="col-5 col-md-1">
             <select
               className="form-select form-select-sm"
               value={filterVoted}
               onChange={(e) => setFilterVoted(e.target.value)}
             >
-              <option value="ALL">Voted Status: All</option>
-              <option value="VOTED">Has Voted</option>
+              <option value="ALL">Votes: All</option>
+              <option value="VOTED">Voted</option>
               <option value="NOT_VOTED">Not Voted</option>
             </select>
           </div>
 
-          <div className="col-12 col-md-1 text-md-end">
+          {/* Refresh Button */}
+          <div className="col-1 text-end">
             <button
               onClick={loadData}
-              className="btn btn-light btn-sm border w-100"
-              title="Refresh"
+              className="btn btn-light btn-sm border w-100 d-flex align-items-center justify-content-center"
+              title="Refresh Roster"
             >
               <RefreshCw size={14} className={loading ? 'spin' : ''} />
             </button>
@@ -319,13 +558,14 @@ export function StudentManagement() {
         </div>
       </div>
 
-      {/* Students Table */}
+      {/* Students Data Table */}
       <div className="card border-0 shadow-sm" style={{ borderRadius: '16px', overflow: 'hidden' }}>
         <div className="table-responsive">
           <table className="table table-hover align-middle mb-0">
             <thead className="table-light small text-uppercase fw-bold text-secondary">
               <tr>
                 <th className="ps-4">Matric Number</th>
+                <th>Level</th>
                 <th>Student Full Name</th>
                 <th>Registered Email</th>
                 <th>Email Verified</th>
@@ -337,40 +577,89 @@ export function StudentManagement() {
             <tbody>
               {students.length === 0 ? (
                 <tr>
-                  <td colSpan="7" className="text-center py-5 text-muted">
-                    No student records found matching filter criteria.
+                  <td colSpan="8" className="text-center py-5 text-muted">
+                    {loading ? (
+                      <div className="py-3">
+                        <span className="spinner-border spinner-border-sm me-2 text-success" />
+                        <span>Loading voter registry records...</span>
+                      </div>
+                    ) : (
+                      'No student records found matching the filter criteria.'
+                    )}
                   </td>
                 </tr>
               ) : (
                 students.map((s) => (
                   <tr key={s.id}>
+                    {/* Matric Number */}
                     <td className="ps-4">
                       <span className="font-monospace fw-bold text-dark fs-6">
                         {s.matric_number}
                       </span>
                     </td>
+
+                    {/* Level / Cohort Badge */}
                     <td>
-                      <span className="fw-semibold text-dark">{s.full_name}</span>
-                    </td>
-                    <td className="small text-secondary font-monospace">
-                      {s.email}
-                    </td>
-                    <td>
-                      {s.email_verified ? (
-                        <span className="badge bg-success-subtle text-success border border-success-subtle">
-                          Verified
+                      {s.cohort === 'ND1' ? (
+                        <span className="badge bg-primary-subtle text-primary border border-primary-subtle px-2 py-1">
+                          ND1
+                        </span>
+                      ) : s.cohort === 'ND2' ? (
+                        <span className="badge bg-success-subtle text-success border border-success-subtle px-2 py-1">
+                          ND2
                         </span>
                       ) : (
-                        <button
-                          onClick={() => handleMarkVerified(s)}
-                          className="btn btn-xs btn-outline-warning rounded-pill py-0 px-2 small"
-                          title="Click to manually verify email"
-                          style={{ fontSize: '0.74rem' }}
-                        >
-                          Unverified (Verify)
-                        </button>
+                        <span className="badge bg-secondary-subtle text-secondary px-2 py-1">
+                          {s.cohort}
+                        </span>
                       )}
                     </td>
+
+                    {/* Full Name */}
+                    <td>
+                      {s.full_name ? (
+                        <span className="fw-semibold text-dark">{s.full_name}</span>
+                      ) : (
+                        <span className="text-muted fst-italic small">Name Not Provided</span>
+                      )}
+                    </td>
+
+                    {/* Email */}
+                    <td>
+                      {s.email ? (
+                        <span className="small text-secondary font-monospace">
+                          {s.email}
+                        </span>
+                      ) : (
+                        <span className="badge bg-warning-subtle text-warning border border-warning-subtle">
+                          No Email Added
+                        </span>
+                      )}
+                    </td>
+
+                    {/* Email Verified */}
+                    <td>
+                      {s.email ? (
+                        s.email_verified ? (
+                          <span className="badge bg-success-subtle text-success border border-success-subtle">
+                            Verified
+                          </span>
+                        ) : (
+                          <button
+                            onClick={() => handleMarkVerified(s)}
+                            className="btn btn-xs btn-outline-warning rounded-pill py-0 px-2 small"
+                            title="Click to manually verify email"
+                            style={{ fontSize: '0.74rem' }}
+                          >
+                            Unverified (Verify)
+                          </button>
+                        )
+                      ) : (
+                        <span className="text-muted small">&mdash;</span>
+                      )}
+                    </td>
+
+                    {/* Eligibility Toggle */}
                     <td>
                       <button
                         onClick={() => handleToggleEligibility(s)}
@@ -383,6 +672,8 @@ export function StudentManagement() {
                         {s.eligible_to_vote ? 'Eligible' : 'Blocked'}
                       </button>
                     </td>
+
+                    {/* Has Voted */}
                     <td>
                       {s.has_voted ? (
                         <span className="badge bg-success d-inline-flex align-items-center gap-1">
@@ -392,6 +683,8 @@ export function StudentManagement() {
                         <span className="badge bg-secondary">No</span>
                       )}
                     </td>
+
+                    {/* Actions */}
                     <td className="text-end pe-4">
                       <div className="btn-group">
                         {s.has_voted && (
@@ -412,7 +705,7 @@ export function StudentManagement() {
                         </button>
                         <button
                           onClick={async () => {
-                            if (window.confirm(`Delete student "${s.full_name}"?`)) {
+                            if (window.confirm(`Delete student "${s.full_name || s.matric_number}"?`)) {
                               await studentService.deleteStudent(s.id);
                               loadData();
                             }
@@ -451,46 +744,64 @@ export function StudentManagement() {
                     </div>
                   )}
 
+                  {/* Matric Number */}
                   <div className="mb-3">
-                    <label className="form-label small fw-bold text-dark">Matriculation Number</label>
+                    <div className="d-flex justify-content-between align-items-center mb-1">
+                      <label className="form-label small fw-bold text-dark mb-0">Matriculation Number</label>
+                      {manualValidation?.isValid && (
+                        <span className="badge bg-success-subtle text-success border border-success-subtle">
+                          Valid {manualValidation.cohort}
+                        </span>
+                      )}
+                    </div>
                     <input
                       type="text"
-                      className="form-control font-monospace"
-                      placeholder="e.g. FPA/CS/24/1-0025"
+                      className={`form-control font-monospace ${
+                        manualValidation ? (manualValidation.isValid ? 'is-valid' : 'is-invalid') : ''
+                      }`}
+                      placeholder="e.g. FPA/CS/24/1-0025 or FPA/CS/25/1-0042"
                       value={manualForm.matric_number}
-                      onChange={(e) => setManualForm({ ...manualForm, matric_number: e.target.value.toUpperCase() })}
+                      onChange={(e) => handleManualMatricChange(e.target.value)}
                       required
                     />
-                    <div className="form-text small" style={{ fontSize: '0.75rem' }}>
-                      Valid ranges: Group 1 (24/1-0001 to 0084) & Group 2 (25/1-0001 to 0142)
+                    <div className="form-text small" style={{ fontSize: '0.74rem' }}>
+                      Recognized ranges: ND2 (<code>FPA/CS/24/1-0001</code> to <code>0084</code>) & ND1 (<code>FPA/CS/25/1-0001</code> to <code>0142</code>)
                     </div>
                   </div>
 
+                  {/* Full Name */}
                   <div className="mb-3">
-                    <label className="form-label small fw-bold text-dark">Full Name</label>
+                    <label className="form-label small fw-bold text-dark">
+                      Student Full Name <span className="text-muted fw-normal">(Optional if Email is provided)</span>
+                    </label>
                     <input
                       type="text"
                       className="form-control"
                       placeholder="e.g. OLUWATOYIN BLESSING ADEBAYO"
                       value={manualForm.full_name}
                       onChange={(e) => setManualForm({ ...manualForm, full_name: e.target.value })}
-                      required
                     />
                   </div>
 
+                  {/* Email Address */}
                   <div className="mb-3">
-                    <label className="form-label small fw-bold text-dark">Registered Email</label>
+                    <label className="form-label small fw-bold text-dark">
+                      Registered Email <span className="text-muted fw-normal">(Optional if Name is provided)</span>
+                    </label>
                     <input
                       type="email"
                       className="form-control"
                       placeholder="student@student.nacos.edu"
                       value={manualForm.email}
                       onChange={(e) => setManualForm({ ...manualForm, email: e.target.value })}
-                      required
                     />
+                    <div className="form-text small" style={{ fontSize: '0.74rem' }}>
+                      Can be imported or added later without losing student record.
+                    </div>
                   </div>
 
-                  <div className="form-check form-switch mt-2">
+                  {/* Eligibility Toggle */}
+                  <div className="form-check form-switch mt-3">
                     <input
                       className="form-check-input"
                       type="checkbox"
@@ -505,11 +816,11 @@ export function StudentManagement() {
                 </div>
 
                 <div className="modal-footer p-3 bg-light d-flex justify-content-between">
-                  <button type="button" className="btn btn-outline-secondary rounded-pill px-4" onClick={() => setShowManualModal(false)}>
+                  <button type="button" className="btn btn-outline-secondary rounded-pill px-4" onClick={() => setShowManualModal(false)} disabled={manualSaving}>
                     Cancel
                   </button>
-                  <button type="submit" className="btn btn-nacos-primary rounded-pill px-4 fw-bold">
-                    Save Record
+                  <button type="submit" className="btn btn-nacos-primary rounded-pill px-4 fw-bold" disabled={manualSaving}>
+                    {manualSaving ? 'Saving...' : editingStudent ? 'Update Record' : 'Save Student'}
                   </button>
                 </div>
               </form>
@@ -526,14 +837,45 @@ export function StudentManagement() {
               <div className="modal-header p-3 border-bottom">
                 <div className="d-flex align-items-center gap-2">
                   <FileSpreadsheet className="text-success" size={24} />
-                  <h5 className="modal-title fw-bold mb-0">Import Students from CSV</h5>
+                  <div>
+                    <h5 className="modal-title fw-bold mb-0">Import Students from CSV</h5>
+                    <span className="text-muted small" style={{ fontSize: '0.75rem' }}>
+                      Non-destructive upsert by Matriculation Number
+                    </span>
+                  </div>
                 </div>
                 <button type="button" className="btn-close" onClick={() => setShowCsvModal(false)} disabled={csvImporting} />
               </div>
 
               <div className="modal-body p-4">
+                {/* 3 CSV Options Explanation Banner */}
+                <div className="bg-light p-3 rounded-3 mb-3 border">
+                  <div className="small fw-bold text-dark mb-1">Supported CSV Import Formats:</div>
+                  <div className="row g-2 small text-secondary">
+                    <div className="col-12 col-md-4">
+                      <div className="p-2 bg-white rounded border">
+                        <strong className="text-dark d-block">1. Matric + Name</strong>
+                        <code>matric_number, full_name</code>
+                      </div>
+                    </div>
+                    <div className="col-12 col-md-4">
+                      <div className="p-2 bg-white rounded border">
+                        <strong className="text-dark d-block">2. Matric + Email</strong>
+                        <code>matric_number, email</code>
+                      </div>
+                    </div>
+                    <div className="col-12 col-md-4">
+                      <div className="p-2 bg-white rounded border">
+                        <strong className="text-dark d-block">3. Full List</strong>
+                        <code>matric, name, email</code>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* File Input */}
                 <div className="mb-3">
-                  <label className="form-label small fw-bold text-dark">Select CSV File</label>
+                  <label className="form-label small fw-bold text-dark">Select CSV File to Upload</label>
                   <input
                     type="file"
                     className="form-control"
@@ -542,75 +884,110 @@ export function StudentManagement() {
                     disabled={csvParsing || csvImporting}
                   />
                   <div className="form-text small mt-1">
-                    Columns supported: <code>matric_number</code>, <code>full_name</code>, <code>email</code>
+                    Headers recognized automatically: <em>Matric Number, matric_no, Full Name, Name, Gmail, Email</em> (case-insensitive)
                   </div>
                 </div>
 
                 {csvParsing && (
-                  <div className="text-center py-3">
-                    <span className="spinner-border spinner-border-sm me-2" />
-                    <span>Parsing and validating student records...</span>
+                  <div className="text-center py-4">
+                    <span className="spinner-border spinner-border-sm me-2 text-success" />
+                    <span>Parsing and analyzing CSV structure...</span>
                   </div>
                 )}
 
                 {csvPreview && (
                   <div>
+                    {/* Mode Detection Header */}
+                    <div className="d-flex align-items-center justify-content-between p-2 mb-3 bg-dark text-white rounded-3 px-3">
+                      <div className="d-flex align-items-center gap-2">
+                        <span className="badge bg-success">Detected Mode</span>
+                        <span className="fw-bold">{csvPreview.modeLabel}</span>
+                      </div>
+                      <span className="small text-secondary">
+                        {csvPreview.totalProcessed} total rows in CSV
+                      </span>
+                    </div>
+
+                    {/* Stats Tiles */}
                     <div className="row g-2 mb-3">
-                      <div className="col-4">
+                      <div className="col-3">
                         <div className="p-2 bg-success bg-opacity-10 border border-success rounded text-center">
-                          <span className="small text-success d-block fw-bold">Valid Students</span>
+                          <span className="small text-success d-block fw-bold">Valid Records</span>
                           <span className="fs-5 fw-bold text-success">{csvPreview.validStudents.length}</span>
                         </div>
                       </div>
-                      <div className="col-4">
-                        <div className="p-2 bg-danger bg-opacity-10 border border-danger rounded text-center">
-                          <span className="small text-danger d-block fw-bold">Invalid / Out of Range</span>
-                          <span className="fs-5 fw-bold text-danger">{csvPreview.invalidRows.length}</span>
+                      <div className="col-3">
+                        <div className="p-2 bg-primary bg-opacity-10 border border-primary rounded text-center">
+                          <span className="small text-primary d-block fw-bold">Cohort Breakdown</span>
+                          <span className="small text-dark fw-bold d-block">
+                            ND1: {csvPreview.nd1Count} &bull; ND2: {csvPreview.nd2Count}
+                          </span>
                         </div>
                       </div>
-                      <div className="col-4">
-                        <div className="p-2 bg-warning bg-opacity-10 border border-warning rounded text-center">
-                          <span className="small text-dark d-block fw-bold">Duplicate Rows</span>
-                          <span className="fs-5 fw-bold text-dark">{csvPreview.duplicateCount}</span>
+                      <div className="col-3">
+                        <div className="p-2 bg-info bg-opacity-10 border border-info rounded text-center">
+                          <span className="small text-info-emphasis d-block fw-bold">Will Update / Insert</span>
+                          <span className="small text-dark fw-bold d-block">
+                            {csvPreview.willUpdateCount} Update &bull; {csvPreview.willInsertCount} New
+                          </span>
+                        </div>
+                      </div>
+                      <div className="col-3">
+                        <div className="p-2 bg-danger bg-opacity-10 border border-danger rounded text-center">
+                          <span className="small text-danger d-block fw-bold">Invalid / Dupes</span>
+                          <span className="fs-5 fw-bold text-danger">
+                            {csvPreview.invalidRows.length}
+                          </span>
                         </div>
                       </div>
                     </div>
 
+                    {/* Validation Warnings List */}
                     {csvPreview.invalidRows.length > 0 && (
-                      <div className="alert alert-warning small py-2 mb-3" style={{ maxHeight: '120px', overflowY: 'auto' }}>
-                        <strong>Validation Warnings:</strong>
+                      <div className="alert alert-warning small py-2 mb-3" style={{ maxHeight: '130px', overflowY: 'auto' }}>
+                        <strong>Validation Warnings & Duplicates:</strong>
                         <ul className="mb-0 ps-3">
-                          {csvPreview.invalidRows.slice(0, 5).map((inv, idx) => (
-                            <li key={idx}>Line {inv.row}: {inv.reason}</li>
+                          {csvPreview.invalidRows.slice(0, 6).map((inv, idx) => (
+                            <li key={idx}>Row {inv.row}: {inv.reason}</li>
                           ))}
-                          {csvPreview.invalidRows.length > 5 && (
-                            <li>...and {csvPreview.invalidRows.length - 5} more issues</li>
+                          {csvPreview.invalidRows.length > 6 && (
+                            <li>...and {csvPreview.invalidRows.length - 6} more skipped rows</li>
                           )}
                         </ul>
                       </div>
                     )}
 
-                    <div className="border rounded p-2" style={{ maxHeight: '200px', overflowY: 'auto' }}>
+                    {/* Preview Table */}
+                    <div className="border rounded p-2" style={{ maxHeight: '220px', overflowY: 'auto' }}>
                       <table className="table table-sm table-striped small mb-0 font-monospace">
                         <thead>
                           <tr>
                             <th>Matric Number</th>
-                            <th>Full Name</th>
-                            <th>Email</th>
                             <th>Cohort</th>
+                            <th>Full Name</th>
+                            <th>Email Address</th>
                           </tr>
                         </thead>
                         <tbody>
-                          {csvPreview.validStudents.slice(0, 10).map((vs, idx) => (
+                          {csvPreview.validStudents.slice(0, 15).map((vs, idx) => (
                             <tr key={idx}>
-                              <td>{vs.matric_number}</td>
-                              <td>{vs.full_name}</td>
-                              <td>{vs.email}</td>
-                              <td><span className="badge bg-secondary">{vs.group || 'OK'}</span></td>
+                              <td className="fw-bold">{vs.matric_number}</td>
+                              <td>
+                                <span className={`badge ${vs.cohort === 'ND1' ? 'bg-primary' : 'bg-success'}`}>
+                                  {vs.cohort}
+                                </span>
+                              </td>
+                              <td>{vs.full_name || <span className="text-muted fst-italic">Omitted</span>}</td>
+                              <td>{vs.email || <span className="text-muted fst-italic">Omitted</span>}</td>
                             </tr>
                           ))}
                         </tbody>
                       </table>
+                      {csvPreview.validStudents.length > 15 && (
+                        <div className="text-center small text-muted py-1 border-top">
+                          Showing first 15 of {csvPreview.validStudents.length} valid students
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -631,7 +1008,14 @@ export function StudentManagement() {
                   onClick={handleCommitCsv}
                   disabled={!csvPreview || !csvPreview.validStudents.length || csvImporting}
                 >
-                  {csvImporting ? 'Importing Students...' : `Commit Import (${csvPreview?.validStudents?.length || 0})`}
+                  {csvImporting ? (
+                    <>
+                      <span className="spinner-border spinner-border-sm me-2" />
+                      <span>Merging Records...</span>
+                    </>
+                  ) : (
+                    `Commit Import (${csvPreview?.validStudents?.length || 0} Records)`
+                  )}
                 </button>
               </div>
             </div>
@@ -645,7 +1029,7 @@ export function StudentManagement() {
         onClose={() => setShowResetModal(false)}
         onConfirm={handleConfirmReset}
         type="SINGLE_VOTER"
-        targetName={`${selectedStudentForReset?.full_name} (${selectedStudentForReset?.matric_number})`}
+        targetName={`${selectedStudentForReset?.full_name || selectedStudentForReset?.matric_number}`}
       />
     </div>
   );

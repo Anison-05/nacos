@@ -12,65 +12,30 @@ export default async function handler(req, res) {
 
   try {
     const supabase = getServiceSupabase();
-    let importedCount = 0;
-    let errors = [];
 
-    for (const student of students) {
-      const cleanMatric = student.matric_number.trim().toUpperCase();
-      const cleanEmail = student.email.trim().toLowerCase();
-      const fullName = student.full_name.trim();
+    // Clean payload
+    const payload = students.map((s) => ({
+      matric_number: (s.matric_number || '').trim().toUpperCase(),
+      full_name: s.full_name ? s.full_name.trim() : null,
+      email: s.email ? s.email.trim().toLowerCase() : null
+    }));
 
-      // Check if auth user already exists or create new one
-      let userId = null;
-      const { data: userList } = await supabase.auth.admin.listUsers();
-      const existingUser = userList?.users?.find((u) => u.email === cleanEmail);
+    // 1. Execute atomic bulk upsert in PostgreSQL
+    const { data: rpcResult, error: rpcErr } = await supabase.rpc('admin_bulk_upsert_students', {
+      p_students: payload
+    });
 
-      if (existingUser) {
-        userId = existingUser.id;
-      } else {
-        // Generate secure random temp password
-        const tempPassword = 'NacosVote#' + Math.random().toString(36).substring(2, 8) + '!';
-        const { data: newUser, error: createAuthErr } = await supabase.auth.admin.createUser({
-          email: cleanEmail,
-          password: tempPassword,
-          email_confirm: false,
-          user_metadata: {
-            full_name: fullName,
-            matric_number: cleanMatric
-          }
-        });
-
-        if (createAuthErr) {
-          errors.push({ matric: cleanMatric, error: createAuthErr.message });
-          continue;
-        }
-        userId = newUser.user.id;
-      }
-
-      // Upsert into students table
-      const { error: upsertErr } = await supabase
-        .from('students')
-        .upsert({
-          id: userId,
-          matric_number: cleanMatric,
-          full_name: fullName,
-          email: cleanEmail,
-          email_verified: false,
-          eligible_to_vote: true,
-          has_voted: false
-        }, { onConflict: 'matric_number' });
-
-      if (upsertErr) {
-        errors.push({ matric: cleanMatric, error: upsertErr.message });
-      } else {
-        importedCount++;
-      }
+    if (rpcErr) {
+      console.error('RPC admin_bulk_upsert_students error:', rpcErr);
+      return res.status(500).json({ error: rpcErr.message || 'Failed to bulk upsert students' });
     }
 
     return res.status(200).json({
       success: true,
-      imported: importedCount,
-      errors
+      imported: rpcResult?.inserted || 0,
+      updated: rpcResult?.updated || 0,
+      total: rpcResult?.total || 0,
+      skipped: rpcResult?.skipped || 0
     });
   } catch (err) {
     console.error('Import error:', err);

@@ -1,44 +1,19 @@
 import { supabase, isSupabaseConfigured } from '../lib/supabaseClient';
-import { normalizeMatricNumber } from '../lib/matricValidator';
+import { normalizeMatricNumber, getStudentCohort } from '../lib/matricValidator';
 
 export const studentService = {
   /**
-   * Fetches students with filtering, searching, and pagination
+   * Fetches students with filtering, searching, and cohort detection
    */
-  async getStudents({ search = '', filterEligibility = 'ALL', filterVoted = 'ALL' } = {}) {
+  async getStudents({
+    search = '',
+    filterEligibility = 'ALL',
+    filterVoted = 'ALL',
+    filterCohort = 'ALL',
+    filterEmailStatus = 'ALL'
+  } = {}) {
     if (!isSupabaseConfigured) {
-      return [
-        {
-          id: 'demo-s-1',
-          matric_number: 'FPA/CS/24/1-0001',
-          full_name: 'ABDULRAHMAN YUSUF',
-          email: 'abdulrahman@student.nacos.edu',
-          email_verified: true,
-          eligible_to_vote: true,
-          has_voted: true,
-          created_at: new Date().toISOString()
-        },
-        {
-          id: 'demo-s-2',
-          matric_number: 'FPA/CS/24/1-0015',
-          full_name: 'CHIDINMA CYNTHIA EZE',
-          email: 'chidinma@student.nacos.edu',
-          email_verified: true,
-          eligible_to_vote: true,
-          has_voted: false,
-          created_at: new Date().toISOString()
-        },
-        {
-          id: 'demo-s-3',
-          matric_number: 'FPA/CS/25/1-0050',
-          full_name: 'OLUWASEUN DAVID ADELEKE',
-          email: 'oluwaseun@student.nacos.edu',
-          email_verified: false,
-          eligible_to_vote: true,
-          has_voted: false,
-          created_at: new Date().toISOString()
-        }
-      ];
+      throw new Error('Supabase is not configured.');
     }
 
     let query = supabase
@@ -46,66 +21,97 @@ export const studentService = {
       .select('*')
       .order('matric_number', { ascending: true });
 
-    if (search.trim()) {
+    // Multi-field search (Matric, Name, Email)
+    if (search && search.trim()) {
       const term = search.trim();
       query = query.or(`matric_number.ilike.%${term}%,full_name.ilike.%${term}%,email.ilike.%${term}%`);
     }
 
+    // Eligibility Filter
     if (filterEligibility === 'ELIGIBLE') {
       query = query.eq('eligible_to_vote', true);
     } else if (filterEligibility === 'INELIGIBLE') {
       query = query.eq('eligible_to_vote', false);
     }
 
+    // Voting Status Filter
     if (filterVoted === 'VOTED') {
       query = query.eq('has_voted', true);
     } else if (filterVoted === 'NOT_VOTED') {
       query = query.eq('has_voted', false);
     }
 
+    // Cohort / Level Filter (ND1 vs ND2)
+    if (filterCohort === 'ND1') {
+      query = query.ilike('matric_number', 'FPA/CS/25/%');
+    } else if (filterCohort === 'ND2') {
+      query = query.ilike('matric_number', 'FPA/CS/24/%');
+    }
+
+    // Email Status Filter
+    if (filterEmailStatus === 'HAS_EMAIL') {
+      query = query.not('email', 'is', null).neq('email', '');
+    } else if (filterEmailStatus === 'MISSING_EMAIL') {
+      query = query.or('email.is.null,email.eq.""');
+    }
+
     const { data, error } = await query;
     if (error) throw error;
-    return data;
+
+    // Attach computed cohort / level to each record
+    return (data || []).map((s) => ({
+      ...s,
+      cohort: getStudentCohort(s.matric_number) || 'Unassigned',
+      level: getStudentCohort(s.matric_number) || 'Unassigned'
+    }));
   },
 
   /**
-   * Adds a student manually
+   * Adds or updates a student manually (flexible fields)
    */
   async addStudentManual({ matric_number, full_name, email, eligible_to_vote = true }) {
-    const matric = normalizeMatricNumber(matric_number);
-    const cleanEmail = email.trim().toLowerCase();
-
     if (!isSupabaseConfigured) {
-      return {
-        id: 'mock-student-' + Date.now(),
-        matric_number: matric,
-        full_name,
-        email: cleanEmail,
-        eligible_to_vote,
-        has_voted: false,
-        email_verified: false
+      throw new Error('Supabase is not configured.');
+    }
+
+    const matric = normalizeMatricNumber(matric_number);
+    const cleanEmail = email ? email.trim().toLowerCase() : null;
+    const cleanName = full_name ? full_name.trim() : null;
+
+    // Check if student with this matric already exists
+    const { data: existing } = await supabase
+      .from('students')
+      .select('*')
+      .ilike('matric_number', matric)
+      .maybeSingle();
+
+    if (existing) {
+      // Non-destructive update: never overwrite existing values with null/blank
+      const updates = {
+        updated_at: new Date().toISOString(),
+        eligible_to_vote
       };
+      if (cleanName) updates.full_name = cleanName;
+      if (cleanEmail) updates.email = cleanEmail;
+
+      const { data, error } = await supabase
+        .from('students')
+        .update(updates)
+        .eq('id', existing.id)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return { ...data, cohort: getStudentCohort(data.matric_number), updated: true };
     }
 
-    // Try calling Serverless API route if available, or direct insert
-    try {
-      const resp = await fetch('/api/admin/students/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ matric_number: matric, full_name, email: cleanEmail, eligible_to_vote })
-      });
-      if (resp.ok) {
-        return await resp.json();
-      }
-    } catch {
-      // Fallback to Supabase direct client if running without local API proxy
-    }
-
+    // Insert new student
     const { data, error } = await supabase
       .from('students')
       .insert([{
+        id: crypto.randomUUID ? crypto.randomUUID() : undefined,
         matric_number: matric,
-        full_name: full_name.trim(),
+        full_name: cleanName,
         email: cleanEmail,
         eligible_to_vote,
         email_verified: false,
@@ -115,91 +121,107 @@ export const studentService = {
       .single();
 
     if (error) throw error;
-    return data;
+    return { ...data, cohort: getStudentCohort(data.matric_number), inserted: true };
   },
 
   /**
    * Updates student information
    */
   async updateStudent(id, updates) {
-    if (updates.matric_number) {
-      updates.matric_number = normalizeMatricNumber(updates.matric_number);
-    }
-    if (updates.email) {
-      updates.email = updates.email.trim().toLowerCase();
+    if (!isSupabaseConfigured) {
+      throw new Error('Supabase is not configured.');
     }
 
-    if (!isSupabaseConfigured) return { id, ...updates };
+    const cleanUpdates = { ...updates, updated_at: new Date().toISOString() };
+    if (cleanUpdates.matric_number) {
+      cleanUpdates.matric_number = normalizeMatricNumber(cleanUpdates.matric_number);
+    }
+    if (cleanUpdates.email !== undefined) {
+      cleanUpdates.email = cleanUpdates.email ? cleanUpdates.email.trim().toLowerCase() : null;
+    }
+    if (cleanUpdates.full_name !== undefined) {
+      cleanUpdates.full_name = cleanUpdates.full_name ? cleanUpdates.full_name.trim() : null;
+    }
 
     const { data, error } = await supabase
       .from('students')
-      .update(updates)
+      .update(cleanUpdates)
       .eq('id', id)
       .select()
       .single();
 
     if (error) throw error;
-    return data;
+    return { ...data, cohort: getStudentCohort(data.matric_number) };
   },
 
   /**
    * Deletes a student from registry
    */
   async deleteStudent(id) {
-    if (!isSupabaseConfigured) return true;
+    if (!isSupabaseConfigured) {
+      throw new Error('Supabase is not configured.');
+    }
+
     const { error } = await supabase
       .from('students')
       .delete()
       .eq('id', id);
+
     if (error) throw error;
     return true;
   },
 
   /**
-   * Batch imports students from CSV
+   * Batch imports students from CSV using the atomic PostgreSQL upsert RPC
+   * Non-destructive: merges by matric_number without blanking out existing data
    */
   async importStudents(studentsList) {
     if (!isSupabaseConfigured) {
+      throw new Error('Supabase is not configured.');
+    }
+
+    if (!Array.isArray(studentsList) || !studentsList.length) {
+      return { success: true, inserted: 0, updated: 0, total: 0 };
+    }
+
+    // Format payload cleanly
+    const payload = studentsList.map((s) => ({
+      matric_number: normalizeMatricNumber(s.matric_number),
+      full_name: s.full_name ? s.full_name.trim() : null,
+      email: s.email ? s.email.trim().toLowerCase() : null
+    }));
+
+    // Call atomic RPC function in Supabase PostgreSQL
+    const { data: rpcData, error: rpcError } = await supabase.rpc('admin_bulk_upsert_students', {
+      p_students: payload
+    });
+
+    if (!rpcError && rpcData) {
       return {
-        imported: studentsList.length,
-        skipped: 0
+        success: true,
+        inserted: rpcData.inserted || 0,
+        updated: rpcData.updated || 0,
+        total: rpcData.total || 0,
+        skipped: rpcData.skipped || 0
       };
     }
 
-    // Try server API first (which provisions Supabase Auth accounts)
+    // If RPC had an error, try serverless endpoint fallback
     try {
       const resp = await fetch('/api/admin/students/import', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ students: studentsList })
+        body: JSON.stringify({ students: payload })
       });
       if (resp.ok) {
         return await resp.json();
       }
     } catch {
-      // Fallback
+      // ignore
     }
 
-    // Supabase direct upsert fallback
-    const payload = studentsList.map((s) => ({
-      matric_number: normalizeMatricNumber(s.matric_number),
-      full_name: s.full_name.trim(),
-      email: s.email.trim().toLowerCase(),
-      eligible_to_vote: true,
-      has_voted: false,
-      email_verified: false
-    }));
-
-    const { data, error } = await supabase
-      .from('students')
-      .upsert(payload, { onConflict: 'matric_number' })
-      .select();
-
-    if (error) throw error;
-    return {
-      imported: data ? data.length : studentsList.length,
-      skipped: 0
-    };
+    if (rpcError) throw rpcError;
+    return { success: true, inserted: payload.length, updated: 0, total: payload.length };
   },
 
   /**
@@ -207,7 +229,7 @@ export const studentService = {
    */
   async resetVoter(studentId, electionId, reason) {
     if (!isSupabaseConfigured) {
-      return { success: true, message: 'Voter reset simulated successfully.' };
+      throw new Error('Supabase is not configured.');
     }
 
     const { data, error } = await supabase.rpc('admin_reset_voter', {
@@ -225,7 +247,7 @@ export const studentService = {
    */
   async resetAllVotes(electionId, confirmationPhrase, reason) {
     if (!isSupabaseConfigured) {
-      return { success: true, message: 'All votes purge simulated successfully.' };
+      throw new Error('Supabase is not configured.');
     }
 
     const { data, error } = await supabase.rpc('admin_reset_all_votes', {
