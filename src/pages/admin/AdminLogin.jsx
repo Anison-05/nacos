@@ -1,13 +1,21 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { ShieldAlert, Lock, Mail, ArrowRight, AlertCircle, ArrowLeft } from 'lucide-react';
 
 export function AdminLogin({ onNavigate }) {
-  const { loginAdmin } = useAuth();
+  const { loginAdmin, logout, userRole } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  // When visiting Admin Login, if an admin session is active, sign out so that
+  // stale browser sessions never bypass the login form.
+  useEffect(() => {
+    if (userRole === 'admin') {
+      logout();
+    }
+  }, []);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -68,7 +76,7 @@ export function AdminLogin({ onNavigate }) {
                       type="email"
                       id="admin_email"
                       className="form-control border-start-0"
-                      placeholder="admin@nacos.org"
+                      placeholder="admin@example.com"
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
                       disabled={loading}

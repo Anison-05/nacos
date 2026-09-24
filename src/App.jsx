@@ -35,7 +35,7 @@ function AppContent() {
   useEffect(() => {
     if (!loading) {
       if (userRole === 'admin') {
-        if (!currentPage.startsWith('admin-') || currentPage === 'admin-login') {
+        if (!currentPage.startsWith('admin-')) {
           setCurrentPage('admin-dashboard');
         }
       } else if (userRole === 'student') {

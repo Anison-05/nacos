@@ -64,7 +64,7 @@ export function AdminSettings() {
       });
 
       await refreshProfile();
-      setProfileSuccess(res?.message || 'Administrator details updated successfully!');
+      setProfileSuccess(res?.message || `Administrator details updated successfully! Your login email is now ${email.trim().toLowerCase()}.`);
     } catch (err) {
       setProfileError(err.message || 'Failed to update administrator profile.');
     } finally {
@@ -95,10 +95,10 @@ export function AdminSettings() {
       });
 
       await auditService.recordLog('CHANGE_ADMIN_PASSWORD', 'admin_user', currentUser?.id, {
-        action: 'Admin password successfully rotated'
+        action: 'Admin password successfully rotated in Supabase Auth'
       });
 
-      setPasswordSuccess('Administrator password changed successfully! Use your new password on subsequent logins.');
+      setPasswordSuccess(res?.message || 'Administrator password changed successfully in Supabase Auth! Use your new password on subsequent logins.');
       setNewPassword('');
       setConfirmPassword('');
     } catch (err) {
@@ -242,7 +242,7 @@ export function AdminSettings() {
                       className="form-control bg-light border-start-0"
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
-                      placeholder="admin@nacos.org"
+                      placeholder="admin@example.com"
                       required
                     />
                   </div>

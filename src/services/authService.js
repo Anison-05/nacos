@@ -13,15 +13,7 @@ export const authService = {
     }
 
     if (!isSupabaseConfigured) {
-      // Demo mock fallback if Supabase credentials are not yet entered
-      return {
-        email: `${matric.toLowerCase().replace(/[^a-z0-9]/g, '')}@student.nacos.edu`,
-        matric_number: matric,
-        full_name: 'Student Demo Account',
-        email_verified: true,
-        eligible_to_vote: true,
-        has_voted: false
-      };
+      throw new Error('Supabase is not configured.');
     }
 
     // Call server API or direct query with student table
@@ -54,10 +46,7 @@ export const authService = {
     const student = await this.lookupStudentByMatric(matric);
 
     if (!isSupabaseConfigured) {
-      return {
-        user: { id: 'demo-student-id', email: student.email },
-        profile: student
-      };
+      throw new Error('Supabase is not configured.');
     }
 
     // 2. Sign in with Supabase Auth
@@ -97,10 +86,7 @@ export const authService = {
     }
 
     if (!isSupabaseConfigured) {
-      return {
-        user: { id: 'demo-admin-id', email },
-        adminProfile: { role: 'super_admin', full_name: 'Electoral Commission Admin' }
-      };
+      throw new Error('Supabase is not configured. Real Supabase Authentication is strictly required.');
     }
 
     const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
@@ -211,8 +197,7 @@ export const authService = {
    */
   async getCurrentSession() {
     if (!isSupabaseConfigured) {
-      const stored = localStorage.getItem('nacos_mock_user');
-      return stored ? JSON.parse(stored) : null;
+      return null;
     }
 
     const { data: { session } } = await supabase.auth.getSession();
@@ -252,7 +237,6 @@ export const authService = {
    */
   async logout() {
     if (!isSupabaseConfigured) {
-      localStorage.removeItem('nacos_mock_user');
       return;
     }
     await supabase.auth.signOut();
@@ -260,59 +244,32 @@ export const authService = {
 
   /**
    * Updates admin profile credentials (name, email, password)
+   * Executes atomic database-level update in Supabase Auth & public.admin_users
    */
   async updateAdminCredentials({ adminId, fullName, newEmail, newPassword }) {
     if (!isSupabaseConfigured) {
-      return { success: true, message: 'Admin credentials updated (demo mode).' };
+      throw new Error('Supabase is not configured. Admin credentials require an active Supabase connection.');
     }
 
-    // Try backend API first (handles auto-confirmation and service role override)
+    // 1. Call atomic RPC procedure in Supabase (updates auth.users, auth.identities, admin_users, audit_logs)
+    const { data, error } = await supabase.rpc('admin_update_credentials', {
+      p_new_email: newEmail ? newEmail.trim().toLowerCase() : null,
+      p_new_password: newPassword ? newPassword.trim() : null,
+      p_full_name: fullName ? fullName.trim() : null
+    });
+
+    if (error) {
+      console.error('admin_update_credentials RPC error:', error);
+      throw new Error(error.message || 'Failed to update administrative credentials in Supabase.');
+    }
+
+    // 2. Refresh active Supabase Auth session so the client holds the updated email / claims
     try {
-      const response = await fetch('/api/admin/update-credentials', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          admin_id: adminId,
-          full_name: fullName,
-          email: newEmail,
-          password: newPassword
-        })
-      });
-
-      if (response.ok) {
-        return await response.json();
-      }
-    } catch (apiErr) {
-      console.warn('API update-credentials call unavailable, falling back to direct client SDK:', apiErr);
+      await supabase.auth.refreshSession();
+    } catch (refreshErr) {
+      console.warn('Session refresh notice:', refreshErr);
     }
 
-    // Fallback: Direct Supabase Client SDK
-    const updates = {};
-    if (newEmail) updates.email = newEmail.trim().toLowerCase();
-    if (newPassword && newPassword.trim()) {
-      if (newPassword.trim().length < 6) {
-        throw new Error('Password must be at least 6 characters long.');
-      }
-      updates.password = newPassword.trim();
-    }
-
-    if (Object.keys(updates).length > 0) {
-      const { error: authErr } = await supabase.auth.updateUser(updates);
-      if (authErr) throw authErr;
-    }
-
-    const dbUpdates = {};
-    if (fullName) dbUpdates.full_name = fullName.trim();
-    if (newEmail) dbUpdates.email = newEmail.trim().toLowerCase();
-
-    if (Object.keys(dbUpdates).length > 0) {
-      const { error: dbErr } = await supabase
-        .from('admin_users')
-        .update(dbUpdates)
-        .eq('id', adminId);
-      if (dbErr) throw dbErr;
-    }
-
-    return { success: true, message: 'Admin profile updated successfully.' };
+    return data || { success: true, message: 'Admin credentials updated successfully in Supabase Auth.' };
   }
 };
