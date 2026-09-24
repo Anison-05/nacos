@@ -35,12 +35,16 @@ export function EmailVerification({ onNavigate, email, matric }) {
     setError('');
     setMessage('');
     try {
-      await authService.verifyOtp(effectiveEmail, otp.trim());
+      if (effectiveMatric) {
+        await authService.verifyVoterOtp(effectiveMatric, effectiveEmail, otp.trim());
+      } else {
+        await authService.verifyOtp(effectiveEmail, otp.trim());
+      }
       await refreshProfile();
-      setMessage('Email verified successfully! Redirecting to ballot...');
+      setMessage('Identity verified successfully! Redirecting to ballot...');
       setTimeout(() => {
         onNavigate('welcome');
-      }, 1500);
+      }, 1000);
     } catch (err) {
       setError(err.message || 'Invalid or expired verification code.');
     } finally {
@@ -54,7 +58,11 @@ export function EmailVerification({ onNavigate, email, matric }) {
     setError('');
     setMessage('');
     try {
-      await authService.resendVerification(effectiveEmail);
+      if (effectiveMatric) {
+        await authService.requestVoterOtp(effectiveMatric, effectiveEmail);
+      } else {
+        await authService.resendVerification(effectiveEmail);
+      }
       setMessage('A new verification code has been dispatched to your email.');
       setResendCooldown(60); // 60s cooldown
     } catch (err) {

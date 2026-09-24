@@ -1,18 +1,45 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { validateMatricNumber } from '../lib/matricValidator';
-import { ShieldCheck, Lock, User, ArrowRight, AlertCircle, HelpCircle } from 'lucide-react';
+import {
+  ShieldCheck,
+  Mail,
+  User,
+  ArrowRight,
+  ArrowLeft,
+  AlertCircle,
+  HelpCircle,
+  CheckCircle2,
+  KeyRound,
+  RotateCw
+} from 'lucide-react';
 
 export function Login({ onNavigate }) {
-  const { loginStudent } = useAuth();
+  const { requestVoterOtp, loginVoter } = useAuth();
+
+  // Multi-step authentication state: 'CREDENTIALS' | 'VERIFY_OTP'
+  const [step, setStep] = useState('CREDENTIALS');
   const [matricNumber, setMatricNumber] = useState('');
-  const [password, setPassword] = useState('');
+  const [email, setEmail] = useState('');
+  const [otpCode, setOtpCode] = useState('');
   const [loading, setLoading] = useState(false);
+  const [resending, setResending] = useState(false);
+  const [resendCooldown, setResendCooldown] = useState(0);
   const [error, setError] = useState('');
+  const [successMsg, setSuccessMsg] = useState('');
   const [fieldValidation, setFieldValidation] = useState(null);
 
+  // Countdown timer for code resend cooldown
+  useEffect(() => {
+    let timer;
+    if (resendCooldown > 0) {
+      timer = setTimeout(() => setResendCooldown((prev) => prev - 1), 1000);
+    }
+    return () => clearTimeout(timer);
+  }, [resendCooldown]);
+
   const handleMatricChange = (e) => {
-    const val = e.target.value.toUpperCase();
+    const val = e.target.value.toUpperCase().replace(/\s+/g, '');
     setMatricNumber(val);
     setError('');
     if (val.length >= 8) {
@@ -23,35 +50,81 @@ export function Login({ onNavigate }) {
     }
   };
 
-  const handleSubmit = async (e) => {
+  // Step 1: Request Verification Code (Validates Matric + Linked Email)
+  const handleRequestCode = async (e) => {
     e.preventDefault();
     setError('');
+    setSuccessMsg('');
 
-    const validation = validateMatricNumber(matricNumber);
+    const cleanMatric = matricNumber.trim().toUpperCase();
+    const cleanEmail = email.trim().toLowerCase();
+
+    const validation = validateMatricNumber(cleanMatric);
     if (!validation.isValid) {
       setError(validation.error || 'Please enter a valid matriculation number.');
       return;
     }
 
-    if (!password) {
-      setError('Please enter your password.');
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      setError('Please enter a valid registered email address.');
       return;
     }
 
     setLoading(true);
     try {
-      const result = await loginStudent(matricNumber, password);
-      // Check if email verified
-      if (!result.profile?.email_verified) {
-        onNavigate('verify-email', { email: result.profile?.email, matric: matricNumber });
-      } else {
-        onNavigate('welcome');
-      }
+      const res = await requestVoterOtp(cleanMatric, cleanEmail);
+      setStep('VERIFY_OTP');
+      setResendCooldown(60);
+      setSuccessMsg(res.message || `A 6-digit verification code was sent to ${cleanEmail}.`);
     } catch (err) {
-      console.error('Login error:', err);
-      setError(err.message || 'Authentication failed. Please verify your credentials.');
+      console.warn('Voter credentials verification failed:', err);
+      setError(err.message || 'Credentials do not match an eligible voter record.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Step 2: Verify Code and Establish Supabase Voter Session
+  const handleVerifyCode = async (e) => {
+    e.preventDefault();
+    setError('');
+    setSuccessMsg('');
+
+    const cleanCode = otpCode.trim();
+    if (!cleanCode || cleanCode.length < 4) {
+      setError('Please enter the 6-digit verification code sent to your email.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const result = await loginVoter(matricNumber, email, cleanCode);
+      setSuccessMsg('Verification successful! Opening your electronic ballot...');
+      setTimeout(() => {
+        onNavigate('welcome');
+      }, 700);
+    } catch (err) {
+      console.error('Voter code verification error:', err);
+      setError(err.message || 'Invalid or expired verification code.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Resend code handler
+  const handleResend = async () => {
+    if (resendCooldown > 0 || resending) return;
+    setResending(true);
+    setError('');
+    setSuccessMsg('');
+    try {
+      await requestVoterOtp(matricNumber, email);
+      setResendCooldown(60);
+      setSuccessMsg(`A new verification code was sent to ${email.trim().toLowerCase()}.`);
+    } catch (err) {
+      setError(err.message || 'Failed to resend code. Please try again shortly.');
+    } finally {
+      setResending(false);
     }
   };
 
@@ -80,96 +153,204 @@ export function Login({ onNavigate }) {
                 </div>
               )}
 
-              <form onSubmit={handleSubmit}>
-                {/* Matric Number */}
-                <div className="mb-3">
-                  <label className="form-label fw-bold text-dark small">
-                    Matriculation Number
-                  </label>
-                  <div className="input-group">
-                    <span className="input-group-text bg-light border-end-0">
-                      <User size={18} className="text-secondary" />
-                    </span>
+              {successMsg && (
+                <div className="alert alert-success d-flex align-items-center gap-2 py-2 px-3 small" role="alert">
+                  <CheckCircle2 size={18} className="flex-shrink-0" />
+                  <div>{successMsg}</div>
+                </div>
+              )}
+
+              {step === 'CREDENTIALS' ? (
+                /* ================= STEP 1: MATRIC + EMAIL ================= */
+                <form onSubmit={handleRequestCode}>
+                  <p className="text-secondary small mb-4">
+                    Enter your <strong>Matriculation Number</strong> and the <strong>Email</strong> linked to your student record. A single-use verification code will be sent to confirm your identity.
+                  </p>
+
+                  {/* Matric Number Field */}
+                  <div className="mb-3">
+                    <label className="form-label fw-bold text-dark small" htmlFor="login_matric_number">
+                      Matriculation Number
+                    </label>
+                    <div className="input-group">
+                      <span className="input-group-text bg-light border-end-0">
+                        <User size={18} className="text-secondary" />
+                      </span>
+                      <input
+                        type="text"
+                        id="login_matric_number"
+                        className={`form-control border-start-0 font-monospace ${
+                          fieldValidation ? (fieldValidation.isValid ? 'is-valid' : 'is-invalid') : ''
+                        }`}
+                        placeholder="e.g. FPA/CS/24/1-0042"
+                        value={matricNumber}
+                        onChange={handleMatricChange}
+                        disabled={loading}
+                        required
+                        autoFocus
+                      />
+                    </div>
+                    <div className="form-text" style={{ fontSize: '0.78rem' }}>
+                      Format: FPA/CS/24/1-XXXX (ND2) or FPA/CS/25/1-XXXX (ND1)
+                    </div>
+                  </div>
+
+                  {/* Email Field */}
+                  <div className="mb-4">
+                    <label className="form-label fw-bold text-dark small" htmlFor="login_email">
+                      Linked Email Address
+                    </label>
+                    <div className="input-group">
+                      <span className="input-group-text bg-light border-end-0">
+                        <Mail size={18} className="text-secondary" />
+                      </span>
+                      <input
+                        type="email"
+                        id="login_email"
+                        className="form-control border-start-0"
+                        placeholder="e.g. yourname@gmail.com"
+                        value={email}
+                        onChange={(e) => {
+                          setEmail(e.target.value);
+                          setError('');
+                        }}
+                        disabled={loading}
+                        required
+                      />
+                    </div>
+                    <div className="form-text" style={{ fontSize: '0.78rem' }}>
+                      Must match the email registered under your matric number.
+                    </div>
+                  </div>
+
+                  {/* Submit Button */}
+                  <button
+                    type="submit"
+                    id="btn_request_code"
+                    className="btn btn-nacos-primary w-100 py-2 d-flex align-items-center justify-content-center gap-2 mb-3"
+                    disabled={loading}
+                  >
+                    {loading ? (
+                      <>
+                        <span className="spinner-border spinner-border-sm" role="status" aria-hidden="true" />
+                        <span>Verifying Student Registry...</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>Send Verification Code</span>
+                        <ArrowRight size={18} />
+                      </>
+                    )}
+                  </button>
+                </form>
+              ) : (
+                /* ================= STEP 2: VERIFICATION CODE ================= */
+                <form onSubmit={handleVerifyCode}>
+                  <div className="text-center mb-3">
+                    <div className="d-inline-flex p-2 bg-success bg-opacity-10 text-success rounded-circle mb-2">
+                      <KeyRound size={26} />
+                    </div>
+                    <h6 className="fw-bold text-dark mb-1">Enter Verification Code</h6>
+                    <p className="text-secondary small mb-2">
+                      Code dispatched to:
+                      <br />
+                      <strong className="text-dark font-monospace">{email.trim().toLowerCase()}</strong>
+                    </p>
+                    <div className="d-flex align-items-center justify-content-center gap-2 mb-3">
+                      <span className="badge bg-light text-secondary border font-monospace">
+                        Matric: {matricNumber}
+                      </span>
+                      <button
+                        type="button"
+                        className="btn btn-link text-decoration-none p-0 small text-primary d-inline-flex align-items-center gap-1"
+                        style={{ fontSize: '0.78rem' }}
+                        onClick={() => {
+                          setStep('CREDENTIALS');
+                          setOtpCode('');
+                          setError('');
+                          setSuccessMsg('');
+                        }}
+                      >
+                        <ArrowLeft size={13} />
+                        <span>Change</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 6-Digit OTP Input */}
+                  <div className="mb-4">
+                    <label className="form-label fw-bold text-dark small text-center d-block" htmlFor="login_otp_code">
+                      6-Digit Security Code
+                    </label>
                     <input
                       type="text"
-                      id="login_matric_number"
-                      className={`form-control border-start-0 font-monospace ${
-                        fieldValidation ? (fieldValidation.isValid ? 'is-valid' : 'is-invalid') : ''
-                      }`}
-                      placeholder="e.g. FPA/CS/24/1-0042"
-                      value={matricNumber}
-                      onChange={handleMatricChange}
+                      id="login_otp_code"
+                      maxLength="8"
+                      className="form-control form-control-lg text-center font-monospace fw-bold"
+                      style={{ fontSize: '1.6rem', letterSpacing: '0.4rem' }}
+                      placeholder="------"
+                      value={otpCode}
+                      onChange={(e) => {
+                        setOtpCode(e.target.value.replace(/[^0-9]/g, ''));
+                        setError('');
+                      }}
                       disabled={loading}
                       required
+                      autoFocus
                     />
                   </div>
-                  <div className="form-text" style={{ fontSize: '0.78rem' }}>
-                    Supported cohorts: Group 1 (24/1-0001 to 0084) & Group 2 (25/1-0001 to 0142)
-                  </div>
-                </div>
 
-                {/* Password */}
-                <div className="mb-4">
-                  <div className="d-flex justify-content-between align-items-center mb-1">
-                    <label className="form-label fw-bold text-dark small mb-0">
-                      Password
-                    </label>
-                    <button
-                      type="button"
-                      className="btn btn-link p-0 text-decoration-none small text-secondary"
-                      onClick={() => onNavigate('forgot-password')}
-                    >
-                      Forgot password?
-                    </button>
-                  </div>
-                  <div className="input-group">
-                    <span className="input-group-text bg-light border-end-0">
-                      <Lock size={18} className="text-secondary" />
-                    </span>
-                    <input
-                      type="password"
-                      id="login_password"
-                      className="form-control border-start-0"
-                      placeholder="Enter your secret password"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      disabled={loading}
-                      required
-                    />
-                  </div>
-                </div>
+                  {/* Verify & Enter Button */}
+                  <button
+                    type="submit"
+                    id="btn_verify_code"
+                    className="btn btn-nacos-primary w-100 py-2 d-flex align-items-center justify-content-center gap-2 mb-3"
+                    disabled={loading}
+                  >
+                    {loading ? (
+                      <>
+                        <span className="spinner-border spinner-border-sm" role="status" aria-hidden="true" />
+                        <span>Validating Code...</span>
+                      </>
+                    ) : (
+                      <>
+                        <ShieldCheck size={18} />
+                        <span>Verify Code & Enter Portal</span>
+                      </>
+                    )}
+                  </button>
 
-                {/* Submit Button */}
-                <button
-                  type="submit"
-                  id="btn_login_submit"
-                  className="btn btn-nacos-primary w-100 py-2 d-flex align-items-center justify-content-center gap-2 mb-3"
-                  disabled={loading}
-                >
-                  {loading ? (
-                    <>
-                      <span className="spinner-border spinner-border-sm" role="status" aria-hidden="true" />
-                      <span>Verifying Credentials...</span>
-                    </>
-                  ) : (
-                    <>
-                      <span>Sign In to Vote</span>
-                      <ArrowRight size={18} />
-                    </>
-                  )}
-                </button>
-              </form>
+                  {/* Resend Code Section */}
+                  <div className="text-center pt-2">
+                    {resendCooldown > 0 ? (
+                      <span className="text-muted small">
+                        Resend available in <strong className="text-dark">{resendCooldown}s</strong>
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        className="btn btn-link text-decoration-none p-0 text-success small d-inline-flex align-items-center gap-1 fw-bold"
+                        onClick={handleResend}
+                        disabled={resending}
+                      >
+                        <RotateCw size={14} className={resending ? 'spinner-border spinner-border-sm' : ''} />
+                        <span>Didn't get code? Resend Code</span>
+                      </button>
+                    )}
+                  </div>
+                </form>
+              )}
 
               {/* Informational Guidance */}
-              <div className="bg-light p-3 rounded-3 border small text-secondary mt-3">
+              <div className="bg-light p-3 rounded-3 border small text-secondary mt-4">
                 <div className="d-flex align-items-center gap-2 text-dark fw-bold mb-1">
                   <HelpCircle size={15} className="text-primary" />
                   <span>Important Voter Information:</span>
                 </div>
                 <ul className="mb-0 ps-3" style={{ fontSize: '0.8rem', lineHeight: '1.4' }}>
-                  <li>Your matric number is tied to your verified departmental email.</li>
+                  <li>Your matric number and email must match your registered department record.</li>
                   <li>Every student is permitted to submit a ballot <strong>exactly once</strong>.</li>
-                  <li>Unverified email accounts will be prompted for OTP confirmation.</li>
+                  <li>If your email is missing, please contact the NACOS Electoral Commission desk.</li>
                 </ul>
               </div>
 

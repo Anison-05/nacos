@@ -65,6 +65,23 @@ export function AuthProvider({ children }) {
     };
   }, []);
 
+  const requestVoterOtp = async (matric, email) => {
+    return await authService.requestVoterOtp(matric, email);
+  };
+
+  const loginVoter = async (matric, email, code) => {
+    setLoading(true);
+    try {
+      const result = await authService.verifyVoterOtp(matric, email, code);
+      setCurrentUser(result.user);
+      setUserRole('student');
+      setStudentProfile(result.profile);
+      return result;
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const loginStudent = async (matric, password) => {
     setLoading(true);
     try {
@@ -115,6 +132,8 @@ export function AuthProvider({ children }) {
     studentProfile,
     adminProfile,
     loading,
+    requestVoterOtp,
+    loginVoter,
     loginStudent,
     loginAdmin,
     logout,
